@@ -1,0 +1,8 @@
+#dataset
+*.txt
+# exe files
+*.out
+*.log
+*.json
+# vendored repos
+.vendor/

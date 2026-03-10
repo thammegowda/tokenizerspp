@@ -1,0 +1,453 @@
+= Chapter 2: The Lexer — Breaking Text into Tokens
+:source-highlighter: rouge
+
+== What is a Lexer?
+
+A **lexer** (also called a **tokenizer** or **scanner**) reads raw characters
+and groups them into meaningful chunks called **tokens**.
+
+Think of it like this: when you read "x + 42", your brain doesn't process
+it character by character. You see three things: the variable `x`, the
+operator `+`, and the number `42`. That's what a lexer does.
+
+== Two Levels of Lexing
+
+Jinja2 has an unusual structure — it needs *two* levels of lexing:
+
+=== Level 1: Template Tokenizer
+
+First, we split the template into three types of chunks:
+
+[source]
+----
+"Hello {{ name }}! {% if happy %}:){% endif %}"
+
+  →  Text("Hello ")
+  →  VarTag("name")
+  →  Text("! ")
+  →  BlockTag("if happy")
+  →  Text(":)")
+  →  BlockTag("endif")
+----
+
+This is simple string scanning — find `{{`, `}}`, `{%`, `%}`, `{#`, `#}`.
+
+=== Level 2: Expression Lexer
+
+Then, *inside* each `{{ ... }}` and `{% ... %}`, we tokenize the expression:
+
+[source]
+----
+"message['role'] == 'user'"
+
+  →  Ident("message")
+  →  LBracket
+  →  String("role")
+  →  RBracket
+  →  Eq
+  →  String("user")
+----
+
+This is the one we need to build properly.
+
+== Designing the Token Types
+
+Every token has a *kind* (what type it is) and a *value* (the actual text).
+
+Here are all the token kinds we need for Jinja2:
+
+[source,cpp]
+----
+enum class TokenKind {
+    // === Literals ===
+    Ident,          // variable_name, for, if, etc.
+    Integer,        // 42
+    Float,          // 3.14
+    String,         // "hello" or 'hello'
+
+    // === Keywords (also valid Idents, but special meaning) ===
+    KW_True,        // true, True
+    KW_False,       // false, False
+    KW_None,        // none, None
+    KW_And,         // and
+    KW_Or,          // or
+    KW_Not,         // not
+    KW_In,          // in
+    KW_Is,          // is
+    KW_If,          // if
+    KW_Else,        // else
+    KW_For,         // for
+    KW_Set,         // set
+    KW_Endfor,      // endfor
+    KW_Endif,       // endif
+    KW_Elif,        // elif
+
+    // === Operators ===
+    Plus,           // +
+    Minus,          // -
+    Star,           // *
+    Slash,          // /
+    DoubleSlash,    // //
+    Percent,        // %
+    DoubleStar,     // **
+    Tilde,          // ~
+
+    // === Comparison ===
+    Eq,             // ==
+    NotEq,          // !=
+    Lt,             // <
+    Gt,             // >
+    LtEq,          // <=
+    GtEq,          // >=
+
+    // === Punctuation ===
+    LParen,         // (
+    RParen,         // )
+    LBracket,       // [
+    RBracket,       // ]
+    LBrace,         // {
+    RBrace,         // }
+    Dot,            // .
+    Comma,          // ,
+    Colon,          // :
+    Pipe,           // |
+    Assign,         // =
+
+    // === End of input ===
+    Eof,
+};
+----
+
+=== Why keywords are separate from Ident
+
+In the expression `for item in items`, the words `for` and `in` are
+keywords with special meaning, while `item` and `items` are identifiers.
+The lexer recognizes keywords by checking if an identifier matches a
+keyword list.
+
+== The Token Struct
+
+[source,cpp]
+----
+struct Token {
+    TokenKind kind;
+    std::string text;       // the actual text of the token
+    size_t offset;          // byte position in source (for error messages)
+};
+----
+
+The `offset` field is crucial for error messages. When something goes wrong
+in parsing, we can point to the exact character in the source:
+
+[source]
+----
+Error at position 15: expected ')' but found ']'
+  message['role']
+                ^
+----
+
+== Building the Expression Lexer
+
+The lexer is a function that takes a string and returns a vector of tokens:
+
+[source,cpp]
+----
+std::vector<Token> lex(std::string_view source);
+----
+
+=== The Algorithm
+
+The lexer works by scanning left-to-right through the input, one character
+at a time. At each position, it looks at the current character and decides
+what kind of token starts here:
+
+[source]
+----
+function lex(source):
+    tokens = []
+    pos = 0
+    while pos < source.length:
+        skip whitespace
+        if at end: break
+        
+        ch = source[pos]
+        if ch is a letter or '_':
+            read identifier/keyword
+        else if ch is a digit:
+            read number (integer or float)
+        else if ch is '"' or "'":
+            read string literal
+        else if ch is an operator character:
+            read operator (may be 1 or 2 chars)
+        else:
+            error: unexpected character
+    
+    append Eof token
+    return tokens
+----
+
+=== Implementation
+
+Let's build it step by step:
+
+[source,cpp]
+----
+class ExprLexer {
+public:
+    explicit ExprLexer(std::string_view source) : src_(source) {}
+    
+    std::vector<Token> lex_all() {
+        std::vector<Token> tokens;
+        while (true) {
+            auto tok = next_token();
+            tokens.push_back(tok);
+            if (tok.kind == TokenKind::Eof) break;
+        }
+        return tokens;
+    }
+
+private:
+    std::string_view src_;
+    size_t pos_ = 0;
+    
+    char peek() const { return pos_ < src_.size() ? src_[pos_] : '\0'; }
+    char advance() { return src_[pos_++]; }
+    
+    void skip_whitespace() {
+        while (pos_ < src_.size() && std::isspace(src_[pos_]))
+            ++pos_;
+    }
+    
+    Token next_token() {
+        skip_whitespace();
+        if (pos_ >= src_.size())
+            return {TokenKind::Eof, "", pos_};
+        
+        size_t start = pos_;
+        char ch = peek();
+        
+        // Identifier or keyword
+        if (std::isalpha(ch) || ch == '_')
+            return lex_ident(start);
+        
+        // Number
+        if (std::isdigit(ch))
+            return lex_number(start);
+        
+        // String literal
+        if (ch == '"' || ch == '\'')
+            return lex_string(start);
+        
+        // Operators and punctuation
+        return lex_operator(start);
+    }
+};
+----
+
+=== Lexing Identifiers and Keywords
+
+An identifier starts with a letter or underscore, followed by letters,
+digits, or underscores:
+
+[source]
+----
+identifier = [a-zA-Z_][a-zA-Z0-9_]*
+----
+
+After reading the identifier, we check if it's a keyword:
+
+[source,cpp]
+----
+Token lex_ident(size_t start) {
+    while (pos_ < src_.size() && (std::isalnum(src_[pos_]) || src_[pos_] == '_'))
+        ++pos_;
+    
+    std::string text(src_.substr(start, pos_ - start));
+    
+    // Check for keywords
+    static const std::unordered_map<std::string, TokenKind> keywords = {
+        {"true", TokenKind::KW_True}, {"True", TokenKind::KW_True},
+        {"false", TokenKind::KW_False}, {"False", TokenKind::KW_False},
+        {"none", TokenKind::KW_None}, {"None", TokenKind::KW_None},
+        {"and", TokenKind::KW_And}, {"or", TokenKind::KW_Or},
+        {"not", TokenKind::KW_Not}, {"in", TokenKind::KW_In},
+        {"is", TokenKind::KW_Is},
+        {"if", TokenKind::KW_If}, {"else", TokenKind::KW_Else},
+        {"elif", TokenKind::KW_Elif},
+        {"for", TokenKind::KW_For}, {"endfor", TokenKind::KW_Endfor},
+        {"endif", TokenKind::KW_Endif}, {"set", TokenKind::KW_Set},
+    };
+    
+    auto it = keywords.find(text);
+    TokenKind kind = (it != keywords.end()) ? it->second : TokenKind::Ident;
+    return {kind, std::move(text), start};
+}
+----
+
+=== Lexing Numbers
+
+Numbers can be integers (`42`) or floats (`3.14`):
+
+[source,cpp]
+----
+Token lex_number(size_t start) {
+    while (pos_ < src_.size() && (std::isdigit(src_[pos_]) || src_[pos_] == '_'))
+        ++pos_;
+    
+    // Check for float
+    if (pos_ < src_.size() && src_[pos_] == '.' && 
+        pos_ + 1 < src_.size() && std::isdigit(src_[pos_ + 1])) {
+        ++pos_; // skip '.'
+        while (pos_ < src_.size() && std::isdigit(src_[pos_]))
+            ++pos_;
+        return {TokenKind::Float, std::string(src_.substr(start, pos_ - start)), start};
+    }
+    
+    return {TokenKind::Integer, std::string(src_.substr(start, pos_ - start)), start};
+}
+----
+
+=== Lexing Strings
+
+Strings are delimited by single or double quotes. We need to handle
+escape sequences like `\"` and `\\`:
+
+[source,cpp]
+----
+Token lex_string(size_t start) {
+    char quote = advance(); // consume opening quote
+    std::string value;
+    
+    while (pos_ < src_.size() && src_[pos_] != quote) {
+        if (src_[pos_] == '\\') {
+            ++pos_; // skip backslash
+            if (pos_ < src_.size()) {
+                switch (src_[pos_]) {
+                    case 'n':  value += '\n'; break;
+                    case 't':  value += '\t'; break;
+                    case '\\': value += '\\'; break;
+                    case '\'': value += '\''; break;
+                    case '"':  value += '"';  break;
+                    default:   value += src_[pos_]; break;
+                }
+                ++pos_;
+            }
+        } else {
+            value += src_[pos_++];
+        }
+    }
+    
+    if (pos_ < src_.size()) ++pos_; // consume closing quote
+    
+    return {TokenKind::String, std::move(value), start};
+}
+----
+
+=== Lexing Operators
+
+Operators can be 1 or 2 characters. We peek ahead to disambiguate:
+
+[source,cpp]
+----
+Token lex_operator(size_t start) {
+    char ch = advance();
+    
+    // Two-character operators
+    if (pos_ < src_.size()) {
+        char next = src_[pos_];
+        if (ch == '=' && next == '=') { ++pos_; return {TokenKind::Eq, "==", start}; }
+        if (ch == '!' && next == '=') { ++pos_; return {TokenKind::NotEq, "!=", start}; }
+        if (ch == '<' && next == '=') { ++pos_; return {TokenKind::LtEq, "<=", start}; }
+        if (ch == '>' && next == '=') { ++pos_; return {TokenKind::GtEq, ">=", start}; }
+        if (ch == '*' && next == '*') { ++pos_; return {TokenKind::DoubleStar, "**", start}; }
+        if (ch == '/' && next == '/') { ++pos_; return {TokenKind::DoubleSlash, "//", start}; }
+    }
+    
+    // Single-character operators
+    switch (ch) {
+        case '+': return {TokenKind::Plus, "+", start};
+        case '-': return {TokenKind::Minus, "-", start};
+        case '*': return {TokenKind::Star, "*", start};
+        case '/': return {TokenKind::Slash, "/", start};
+        case '%': return {TokenKind::Percent, "%", start};
+        case '~': return {TokenKind::Tilde, "~", start};
+        case '<': return {TokenKind::Lt, "<", start};
+        case '>': return {TokenKind::Gt, ">", start};
+        case '=': return {TokenKind::Assign, "=", start};
+        case '(': return {TokenKind::LParen, "(", start};
+        case ')': return {TokenKind::RParen, ")", start};
+        case '[': return {TokenKind::LBracket, "[", start};
+        case ']': return {TokenKind::RBracket, "]", start};
+        case '{': return {TokenKind::LBrace, "{", start};
+        case '}': return {TokenKind::RBrace, "}", start};
+        case '.': return {TokenKind::Dot, ".", start};
+        case ',': return {TokenKind::Comma, ",", start};
+        case ':': return {TokenKind::Colon, ":", start};
+        case '|': return {TokenKind::Pipe, "|", start};
+        default:
+            throw std::runtime_error("Unexpected character: " + std::string(1, ch));
+    }
+}
+----
+
+== Testing the Lexer
+
+Let's verify it works:
+
+[source,cpp]
+----
+// "message['role'] == 'user'"
+auto tokens = ExprLexer("message['role'] == 'user'").lex_all();
+// → [Ident("message"), LBracket, String("role"), RBracket, Eq, String("user"), Eof]
+
+// "loop.index0 % 2 == 0"
+auto tokens2 = ExprLexer("loop.index0 % 2 == 0").lex_all();
+// → [Ident("loop"), Dot, Ident("index0"), Percent, Integer("2"), Eq, Integer("0"), Eof]
+
+// "not item in items"
+auto tokens3 = ExprLexer("not item in items").lex_all();
+// → [KW_Not, Ident("item"), KW_In, Ident("items"), Eof]
+----
+
+== Key Insight: Why Lex First?
+
+You might wonder: why not just parse characters directly? (That's what
+our old parser did.)
+
+Compare parsing `message['role']` with character-by-character vs. tokens:
+
+*Character-by-character* (old way):
+[source,cpp]
+----
+// Must manually skip whitespace, check for quotes, read identifier...
+skip_ws();
+std::string ident;
+while (std::isalnum(peek()) || peek() == '_') ident += advance();
+skip_ws();
+if (peek() == '[') { advance(); skip_ws(); ... }
+----
+
+*Token-based* (new way):
+[source,cpp]
+----
+// Tokens are already clean and classified
+Token ident = expect(TokenKind::Ident);    // "message"
+expect(TokenKind::LBracket);              // [
+Token key = expect(TokenKind::String);     // "role"
+expect(TokenKind::RBracket);             // ]
+----
+
+The token-based version is *shorter, clearer, and handles edge cases*.
+The lexer already dealt with whitespace, string escapes, and multi-character
+operators.
+
+== Summary
+
+[IMPORTANT]
+====
+The lexer's job is simple: read characters, emit tokens. +
+It handles: whitespace, string escapes, multi-char operators, keywords. +
+The parser never sees raw characters — only clean, typed tokens.
+====
+
+Next: Chapter 3 — The Parser.

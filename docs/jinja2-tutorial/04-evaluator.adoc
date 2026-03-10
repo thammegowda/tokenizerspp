@@ -1,0 +1,466 @@
+= Chapter 4: The Evaluator — Walking the Tree
+:source-highlighter: rouge
+
+== What is Evaluation?
+
+We have a tree (AST). Now we need to *walk it* and produce output. This is
+the simplest phase conceptually — just follow the tree structure.
+
+== The Environment
+
+The evaluator needs a **context** — a mapping of variable names to values.
+We use `nlohmann::json` as our value type because it naturally represents
+all Jinja2 types:
+
+[cols="1,1"]
+|===
+| Jinja Type | JSON Type
+
+| string | `json::string`
+| integer | `json::number_integer`
+| float | `json::number_float`
+| boolean | `json::boolean`
+| none/null | `json::null`
+| list | `json::array`
+| dict | `json::object`
+|===
+
+[source,cpp]
+----
+struct Environment {
+    json variables;         // current scope
+    std::string output;     // accumulated output text
+    
+    json lookup(const std::string& name) const {
+        if (variables.contains(name))
+            return variables[name];
+        return json();  // undefined → null
+    }
+    
+    void set(const std::string& name, json value) {
+        variables[name] = std::move(value);
+    }
+    
+    void emit(const std::string& text) {
+        output += text;
+    }
+};
+----
+
+=== Scoping
+
+Jinja2 has scoping rules: variables set inside a `for` loop don't leak out.
+We handle this with a scope stack:
+
+[source,cpp]
+----
+void execute_for(const ForStmt& stmt, Environment& env) {
+    json iterable = evaluate(stmt.iterable, env);
+    
+    // Save current scope
+    json saved_scope = env.variables;
+    
+    for (size_t i = 0; i < iterable.size(); ++i) {
+        // Set loop variable
+        env.set(stmt.var_name, iterable[i]);
+        
+        // Set loop metadata
+        json loop_var = {
+            {"index",    i + 1},
+            {"index0",   i},
+            {"first",    i == 0},
+            {"last",     i == iterable.size() - 1},
+            {"length",   iterable.size()},
+            {"revindex", iterable.size() - i},
+            {"revindex0", iterable.size() - i - 1},
+        };
+        env.set("loop", loop_var);
+        
+        // Execute body
+        execute_body(stmt.body, env);
+    }
+    
+    // Restore scope (variables set inside loop disappear)
+    env.variables = saved_scope;
+    // BUT: namespace mutations survive (handled specially)
+}
+----
+
+== Evaluating Expressions
+
+Expression evaluation is a recursive walk over the AST. Each node type
+has its own evaluation rule:
+
+[source,cpp]
+----
+json evaluate(const ExprNode& node, Environment& env) {
+    return std::visit(overloaded{
+        [&](const LiteralExpr& e) -> json {
+            return e.value;
+        },
+        
+        [&](const IdentExpr& e) -> json {
+            return env.lookup(e.name);
+        },
+        
+        [&](const BinaryExpr& e) -> json {
+            auto left = evaluate(*e.left, env);
+            auto right = evaluate(*e.right, env);
+            return apply_binary_op(e.op, left, right);
+        },
+        
+        [&](const UnaryExpr& e) -> json {
+            auto operand = evaluate(*e.operand, env);
+            if (e.op == "not") return !is_truthy(operand);
+            if (e.op == "-")   return -operand.get<double>();
+            throw error("Unknown unary op: " + e.op);
+        },
+        
+        [&](const GetAttrExpr& e) -> json {
+            auto obj = evaluate(*e.object, env);
+            // Try dict key first, then special properties
+            if (obj.is_object() && obj.contains(e.attr))
+                return obj[e.attr];
+            // Handle special methods: .items(), .keys(), etc.
+            return json();
+        },
+        
+        [&](const GetItemExpr& e) -> json {
+            auto obj = evaluate(*e.object, env);
+            auto key = evaluate(*e.key, env);
+            if (obj.is_array() && key.is_number_integer()) {
+                int idx = key.get<int>();
+                if (idx < 0) idx += obj.size();  // negative indexing!
+                return obj.at(idx);
+            }
+            if (obj.is_object() && key.is_string())
+                return obj[key.get<std::string>()];
+            return json();
+        },
+        
+        [&](const FilterExpr& e) -> json {
+            auto value = evaluate(*e.value, env);
+            return apply_filter(e.name, value, e.args, env);
+        },
+        
+        [&](const TestExpr& e) -> json {
+            auto value = evaluate(*e.value, env);
+            bool result = apply_test(e.name, value, e.args, env);
+            return e.negated ? !result : result;
+        },
+        
+        [&](const CondExpr& e) -> json {
+            auto cond = evaluate(*e.condition, env);
+            if (is_truthy(cond))
+                return evaluate(*e.true_val, env);
+            else if (e.false_val)
+                return evaluate(*e.false_val, env);
+            return json();
+        },
+        
+        [&](const ListExpr& e) -> json {
+            json arr = json::array();
+            for (auto& item : e.items)
+                arr.push_back(evaluate(*item, env));
+            return arr;
+        },
+        
+        [&](const DictExpr& e) -> json {
+            json obj = json::object();
+            for (auto& [k, v] : e.items) {
+                auto key = evaluate(*k, env);
+                obj[key.get<std::string>()] = evaluate(*v, env);
+            }
+            return obj;
+        },
+        
+        // ... other types
+    }, node);
+}
+----
+
+=== Binary Operators
+
+[source,cpp]
+----
+json apply_binary_op(const std::string& op, const json& left, const json& right) {
+    // String concatenation
+    if (op == "+" && left.is_string() && right.is_string())
+        return left.get<std::string>() + right.get<std::string>();
+    if (op == "~")  // tilde always string-concatenates
+        return to_string(left) + to_string(right);
+    
+    // Arithmetic
+    if (op == "+") return to_number(left) + to_number(right);
+    if (op == "-") return to_number(left) - to_number(right);
+    if (op == "*") return to_number(left) * to_number(right);
+    if (op == "/") return to_number(left) / to_number(right);
+    if (op == "%") return (int)to_number(left) % (int)to_number(right);
+    if (op == "//") return (int)(to_number(left) / to_number(right));
+    
+    // Comparison
+    if (op == "==") return left == right;
+    if (op == "!=") return left != right;
+    if (op == "<")  return left < right;
+    if (op == ">")  return left > right;
+    if (op == "<=") return left <= right;
+    if (op == ">=") return left >= right;
+    
+    // Membership
+    if (op == "in") return contains(right, left);
+    
+    throw error("Unknown operator: " + op);
+}
+----
+
+=== Truthiness
+
+In Jinja2, these values are "falsy": `false`, `null`/`none`, `0`, empty
+string `""`, empty list `[]`, empty dict `{}`. Everything else is "truthy":
+
+[source,cpp]
+----
+bool is_truthy(const json& val) {
+    if (val.is_null()) return false;
+    if (val.is_boolean()) return val.get<bool>();
+    if (val.is_number_integer()) return val.get<int64_t>() != 0;
+    if (val.is_number_float()) return val.get<double>() != 0.0;
+    if (val.is_string()) return !val.get_ref<const std::string&>().empty();
+    if (val.is_array()) return !val.empty();
+    if (val.is_object()) return !val.empty();
+    return true;
+}
+----
+
+== Table-Driven Filters
+
+Instead of a giant if-else chain, we use a lookup table:
+
+[source,cpp]
+----
+using FilterFn = std::function<json(const json& value, 
+                                     const std::vector<json>& args,
+                                     const Environment& env)>;
+
+static const std::unordered_map<std::string, FilterFn> FILTERS = {
+    {"length", [](const json& v, auto&, auto&) -> json {
+        if (v.is_string()) return v.get_ref<const std::string&>().size();
+        if (v.is_array()) return v.size();
+        if (v.is_object()) return v.size();
+        return 0;
+    }},
+    
+    {"trim", [](const json& v, auto&, auto&) -> json {
+        auto s = v.get<std::string>();
+        // trim whitespace from both ends
+        auto start = s.find_first_not_of(" \t\n\r");
+        auto end = s.find_last_not_of(" \t\n\r");
+        return (start == std::string::npos) ? "" : s.substr(start, end - start + 1);
+    }},
+    
+    {"upper", [](const json& v, auto&, auto&) -> json {
+        auto s = v.get<std::string>();
+        std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+        return s;
+    }},
+    
+    {"lower", [](const json& v, auto&, auto&) -> json {
+        auto s = v.get<std::string>();
+        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        return s;
+    }},
+    
+    {"default", [](const json& v, const std::vector<json>& args, auto&) -> json {
+        if (v.is_null() && !args.empty()) return args[0];
+        return v;
+    }},
+    
+    {"join", [](const json& v, const std::vector<json>& args, auto&) -> json {
+        std::string sep = args.empty() ? "" : args[0].get<std::string>();
+        std::string result;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) result += sep;
+            result += to_string(v[i]);
+        }
+        return result;
+    }},
+    
+    {"replace", [](const json& v, const std::vector<json>& args, auto&) -> json {
+        auto s = v.get<std::string>();
+        auto old_s = args[0].get<std::string>();
+        auto new_s = args[1].get<std::string>();
+        size_t pos = 0;
+        while ((pos = s.find(old_s, pos)) != std::string::npos) {
+            s.replace(pos, old_s.size(), new_s);
+            pos += new_s.size();
+        }
+        return s;
+    }},
+    
+    // ... add more filters here — each is ~5 lines
+};
+
+json apply_filter(const std::string& name, const json& value,
+                  const std::vector<ExprPtr>& arg_exprs, Environment& env) {
+    // Evaluate arguments
+    std::vector<json> args;
+    for (auto& a : arg_exprs)
+        args.push_back(evaluate(*a, env));
+    
+    auto it = FILTERS.find(name);
+    if (it == FILTERS.end())
+        throw error("Unknown filter: " + name);
+    
+    return it->second(value, args, env);
+}
+----
+
+*Adding a new filter is now one table entry.* No more modifying parser code.
+
+== Table-Driven Tests
+
+Same pattern for `is` tests:
+
+[source,cpp]
+----
+using TestFn = std::function<bool(const json& value, const std::vector<json>& args)>;
+
+static const std::unordered_map<std::string, TestFn> TESTS = {
+    {"defined",   [](const json& v, auto&) { return !v.is_null(); }},
+    {"undefined", [](const json& v, auto&) { return v.is_null(); }},
+    {"none",      [](const json& v, auto&) { return v.is_null(); }},
+    {"string",    [](const json& v, auto&) { return v.is_string(); }},
+    {"number",    [](const json& v, auto&) { return v.is_number(); }},
+    {"integer",   [](const json& v, auto&) { return v.is_number_integer(); }},
+    {"float",     [](const json& v, auto&) { return v.is_number_float(); }},
+    {"mapping",   [](const json& v, auto&) { return v.is_object(); }},
+    {"iterable",  [](const json& v, auto&) { return v.is_array() || v.is_string() || v.is_object(); }},
+    {"sequence",  [](const json& v, auto&) { return v.is_array(); }},
+    {"even",      [](const json& v, auto&) { return v.get<int>() % 2 == 0; }},
+    {"odd",       [](const json& v, auto&) { return v.get<int>() % 2 != 0; }},
+    {"equalto",   [](const json& v, const std::vector<json>& args) { return v == args.at(0); }},
+    {"eq",        [](const json& v, const std::vector<json>& args) { return v == args.at(0); }},
+    {"ne",        [](const json& v, const std::vector<json>& args) { return v != args.at(0); }},
+};
+----
+
+== Executing Statements
+
+Statement execution walks the AST nodes and accumulates output:
+
+[source,cpp]
+----
+void execute(const StmtNode& node, Environment& env) {
+    std::visit(overloaded{
+        [&](const TextStmt& s) {
+            env.emit(s.text);
+        },
+        
+        [&](const OutputStmt& s) {
+            json val = evaluate(*s.expr, env);
+            env.emit(to_string(val));
+        },
+        
+        [&](const ForStmt& s) {
+            execute_for(s, env);
+        },
+        
+        [&](const IfStmt& s) {
+            for (auto& branch : s.branches) {
+                if (!branch.condition || is_truthy(evaluate(*branch.condition, env))) {
+                    execute_body(branch.body, env);
+                    break;
+                }
+            }
+        },
+        
+        [&](const SetStmt& s) {
+            json val = evaluate(*s.value, env);
+            if (s.attr.has_value()) {
+                // Namespace mutation: ns.attr = val
+                env.variables[s.var_name][*s.attr] = val;
+            } else {
+                env.set(s.var_name, val);
+            }
+        },
+        
+        [&](const BlockStmt& s) {
+            execute_body(s.body, env);
+        },
+    }, node);
+}
+----
+
+== Whitespace Control
+
+Jinja2's `{%-` and `-%}` markers trim adjacent whitespace. We handle this
+in a post-processing step after template tokenization, before parsing:
+
+[source,cpp]
+----
+// If a template token has trim_right=true, strip trailing whitespace 
+// from the previous text token.
+// If it has trim_left=true, strip leading whitespace from the next text token.
+
+for (size_t i = 0; i < tokens.size(); ++i) {
+    if (tokens[i].trim_left && i > 0 && tokens[i-1].type == Text) {
+        // Remove trailing whitespace from previous text
+        auto& text = tokens[i-1].value;
+        auto end = text.find_last_not_of(" \t\n\r");
+        if (end != std::string::npos)
+            text.resize(end + 1);
+        else
+            text.clear();
+    }
+    if (tokens[i].trim_right && i + 1 < tokens.size() && tokens[i+1].type == Text) {
+        // Remove leading whitespace from next text
+        auto& text = tokens[i+1].value;
+        auto start = text.find_first_not_of(" \t\n\r");
+        if (start != std::string::npos)
+            text = text.substr(start);
+        else
+            text.clear();
+    }
+}
+----
+
+== The Namespace Trick
+
+The trickiest part of Jinja2 scoping: variables set inside a `for` loop
+are lost when the loop ends. But sometimes you need to accumulate state.
+The solution is `namespace()`:
+
+[source,jinja]
+----
+{% set ns = namespace(count=0) %}
+{% for item in items %}
+    {% set ns.count = ns.count + 1 %}
+{% endfor %}
+Total: {{ ns.count }}
+----
+
+We handle this by detecting `set ns.attr = val` in the parser and treating
+the `ns` variable as mutable even across scopes. In the evaluator:
+
+[source,cpp]
+----
+// In SetStmt, if the target is "name.attr":
+if (s.attr.has_value()) {
+    // This modifies the object in-place, even if we're in a loop scope
+    env.variables[s.var_name][*s.attr] = val;
+}
+// Regular set creates a new binding in the current scope only
+----
+
+== Summary
+
+[IMPORTANT]
+====
+The evaluator walks the AST and produces output. +
+**Expressions** are evaluated recursively — each node type has a rule. +
+**Filters and tests** are table-driven — easy to extend. +
+**Scoping** saves/restores variables at loop boundaries. +
+**Namespace** objects bypass scoping for mutable state.
+====
+
+Next: Chapter 5 — Putting It All Together.

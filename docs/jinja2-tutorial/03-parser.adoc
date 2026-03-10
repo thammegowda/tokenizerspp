@@ -1,0 +1,477 @@
+= Chapter 3: The Parser — From Tokens to Trees
+:source-highlighter: rouge
+
+== What is Parsing?
+
+The lexer gave us a flat list of tokens. But expressions have *structure* —
+`1 + 2 * 3` means `1 + (2 * 3)`, not `(1 + 2) * 3`. The parser's job is
+to figure out this structure and represent it as a tree.
+
+== Abstract Syntax Trees (AST)
+
+An **Abstract Syntax Tree** is a tree where:
+
+- Each **leaf** is a value (number, string, variable name)
+- Each **internal node** is an operation (add, compare, function call)
+
+For example, `1 + 2 * 3` becomes:
+
+[source]
+----
+      [+]
+      / \
+    [1]  [*]
+         / \
+       [2] [3]
+----
+
+And `message['role'] == 'user'` becomes:
+
+[source]
+----
+        [==]
+        /   \
+   [GetItem]  ['user']
+    /     \
+ [message] ['role']
+----
+
+== Designing the AST Node Types
+
+Instead of one big struct (our old design), we use *separate types* for each
+kind of expression. This is type-safe — the compiler ensures you can't
+accidentally access a `name` field on a `BinaryExpr`:
+
+[source,cpp]
+----
+// Each expression type is a distinct struct
+struct LiteralExpr  { json value; };                           // 42, "hello", true, none
+struct IdentExpr    { std::string name; };                     // variable_name
+struct UnaryExpr    { std::string op; ExprPtr operand; };      // not x, -x
+struct BinaryExpr   { std::string op; ExprPtr left, right; };  // a + b, a == b
+struct GetAttrExpr  { ExprPtr object; std::string attr; };     // obj.attr
+struct GetItemExpr  { ExprPtr object; ExprPtr key; };          // obj[key]
+struct SliceExpr    { ExprPtr object; ExprPtr start, end; };   // list[1:3]
+struct CallExpr     { ExprPtr callee; 
+                      std::vector<Arg> args; };                // func(a, b=c)
+struct FilterExpr   { ExprPtr value; std::string name;
+                      std::vector<ExprPtr> args; };            // x | filter(a)
+struct TestExpr     { ExprPtr value; std::string name;
+                      bool negated; 
+                      std::vector<ExprPtr> args; };            // x is defined
+struct CondExpr     { ExprPtr true_val, condition, false_val; }; // a if b else c
+struct ListExpr     { std::vector<ExprPtr> items; };           // [1, 2, 3]
+struct DictExpr     { std::vector<std::pair<ExprPtr,ExprPtr>> items; }; // {a: b}
+
+// ExprPtr is a unique_ptr to the variant
+using ExprNode = std::variant<
+    LiteralExpr, IdentExpr, UnaryExpr, BinaryExpr,
+    GetAttrExpr, GetItemExpr, SliceExpr, CallExpr,
+    FilterExpr, TestExpr, CondExpr, ListExpr, DictExpr
+>;
+using ExprPtr = std::unique_ptr<ExprNode>;
+----
+
+=== Why std::variant?
+
+A `std::variant` is C++'s type-safe union. It can hold *one of* several types.
+When you need to process it, you use `std::visit`:
+
+[source,cpp]
+----
+json evaluate(const ExprNode& node) {
+    return std::visit([](const auto& expr) -> json {
+        using T = std::decay_t<decltype(expr)>;
+        if constexpr (std::is_same_v<T, LiteralExpr>) {
+            return expr.value;
+        } else if constexpr (std::is_same_v<T, IdentExpr>) {
+            return lookup_variable(expr.name);
+        } else if constexpr (std::is_same_v<T, BinaryExpr>) {
+            auto left = evaluate(*expr.left);
+            auto right = evaluate(*expr.right);
+            return apply_operator(expr.op, left, right);
+        }
+        // ... handle each type
+    }, node);
+}
+----
+
+The compiler checks that you handle every type. If you add a new expression
+type and forget to handle it, you get a compile error. This is much safer
+than the old `switch(type)` approach.
+
+== Recursive Descent Parsing
+
+We'll use **recursive descent parsing** — the most intuitive parsing technique.
+The idea is simple:
+
+[IMPORTANT]
+====
+For each rule in the grammar, write one function. +
+Each function calls other functions for sub-rules. +
+The call stack mirrors the parse tree.
+====
+
+=== Operator Precedence
+
+The trickiest part of expression parsing is getting operator precedence right.
+In `1 + 2 * 3`, multiplication binds tighter than addition.
+
+The trick: **lower precedence = higher in the call chain**.
+
+[source]
+----
+parse_or()              ← lowest precedence
+  └→ parse_and()
+       └→ parse_not()
+            └→ parse_compare()
+                 └→ parse_concat()
+                      └→ parse_add()
+                           └→ parse_mul()
+                                └→ parse_pow()
+                                     └→ parse_unary()
+                                          └→ parse_postfix()
+                                               └→ parse_primary()  ← highest precedence
+----
+
+Each level handles *its* operator(s) and delegates everything else to the
+next level down. Here's how `parse_add` works:
+
+[source,cpp]
+----
+// Grammar rule:  add_expr = mul_expr (('+' | '-') mul_expr)*
+ExprPtr parse_add() {
+    auto left = parse_mul();                    // 1. Parse left operand
+    
+    while (at(TokenKind::Plus) || at(TokenKind::Minus)) {
+        std::string op = advance().text;        // 2. Consume operator
+        auto right = parse_mul();               // 3. Parse right operand
+        left = make_binary(op, std::move(left), std::move(right));
+    }
+    
+    return left;                                // 4. Return the tree
+}
+----
+
+For input `1 + 2 * 3`:
+
+1. `parse_add` calls `parse_mul`, which parses `1` and returns it.
+2. We see `+`, consume it.
+3. Call `parse_mul` again. Inside, it parses `2`, sees `*`, parses `3`,
+   and returns `(* 2 3)`.
+4. We build `(+ 1 (* 2 3))` and return it.
+
+*The precedence falls out naturally from the call structure!*
+
+=== The Primary Parser
+
+At the bottom of the chain, `parse_primary` handles the atomic expressions:
+
+[source,cpp]
+----
+ExprPtr parse_primary() {
+    Token tok = peek();
+    
+    switch (tok.kind) {
+        case TokenKind::Integer:
+            advance();
+            return make_literal(std::stoll(tok.text));
+        
+        case TokenKind::Float:
+            advance();
+            return make_literal(std::stod(tok.text));
+        
+        case TokenKind::String:
+            advance();
+            return make_literal(tok.text);
+        
+        case TokenKind::KW_True:
+            advance();
+            return make_literal(true);
+        
+        case TokenKind::KW_False:
+            advance();
+            return make_literal(false);
+        
+        case TokenKind::KW_None:
+            advance();
+            return make_literal(nullptr);
+        
+        case TokenKind::Ident:
+            advance();
+            return make_ident(tok.text);
+        
+        case TokenKind::LParen: {
+            advance();  // skip (
+            auto e = parse_expression();
+            expect(TokenKind::RParen);  // must have )
+            return e;
+        }
+        
+        case TokenKind::LBracket: {
+            advance();  // skip [
+            std::vector<ExprPtr> items;
+            while (!at(TokenKind::RBracket)) {
+                items.push_back(parse_expression());
+                if (at(TokenKind::Comma)) advance();
+            }
+            expect(TokenKind::RBracket);
+            return make_list(std::move(items));
+        }
+        
+        case TokenKind::LBrace: {
+            advance();  // skip {
+            std::vector<std::pair<ExprPtr, ExprPtr>> items;
+            while (!at(TokenKind::RBrace)) {
+                auto key = parse_expression();
+                expect(TokenKind::Colon);
+                auto val = parse_expression();
+                items.emplace_back(std::move(key), std::move(val));
+                if (at(TokenKind::Comma)) advance();
+            }
+            expect(TokenKind::RBrace);
+            return make_dict(std::move(items));
+        }
+        
+        default:
+            throw error("Unexpected token: " + tok.text);
+    }
+}
+----
+
+=== Postfix Operations
+
+After parsing a primary value, we check for postfix operators: `.attr`,
+`[index]`, `(args)`, and `| filter`:
+
+[source,cpp]
+----
+ExprPtr parse_postfix() {
+    auto e = parse_primary();
+    
+    while (true) {
+        if (at(TokenKind::Dot)) {
+            advance();
+            auto attr = expect(TokenKind::Ident).text;
+            e = make_getattr(std::move(e), attr);
+        }
+        else if (at(TokenKind::LBracket)) {
+            advance();
+            // Could be subscript [key] or slice [start:end]
+            if (at(TokenKind::Colon)) {
+                // [:end]
+                advance();
+                auto end = at(TokenKind::RBracket) ? nullptr : parse_expression();
+                expect(TokenKind::RBracket);
+                e = make_slice(std::move(e), nullptr, std::move(end));
+            } else {
+                auto index = parse_expression();
+                if (at(TokenKind::Colon)) {
+                    // [start:end]
+                    advance();
+                    auto end = at(TokenKind::RBracket) ? nullptr : parse_expression();
+                    expect(TokenKind::RBracket);
+                    e = make_slice(std::move(e), std::move(index), std::move(end));
+                } else {
+                    expect(TokenKind::RBracket);
+                    e = make_getitem(std::move(e), std::move(index));
+                }
+            }
+        }
+        else if (at(TokenKind::LParen)) {
+            advance();
+            auto args = parse_arg_list();
+            expect(TokenKind::RParen);
+            e = make_call(std::move(e), std::move(args));
+        }
+        else {
+            break;
+        }
+    }
+    
+    return e;
+}
+----
+
+=== Filter Chains
+
+Filters use the pipe `|` operator and are a special form of function call:
+
+[source,cpp]
+----
+// "items | selectattr('role', 'equalto', 'user') | list"
+//   →  Filter(Filter(items, "selectattr", [...]), "list", [])
+
+ExprPtr parse_filter_chain() {
+    auto e = parse_postfix();
+    
+    while (at(TokenKind::Pipe)) {
+        advance();
+        auto name = expect(TokenKind::Ident).text;
+        std::vector<ExprPtr> args;
+        if (at(TokenKind::LParen)) {
+            advance();
+            while (!at(TokenKind::RParen)) {
+                args.push_back(parse_expression());
+                if (at(TokenKind::Comma)) advance();
+            }
+            expect(TokenKind::RParen);
+        }
+        e = make_filter(std::move(e), name, std::move(args));
+    }
+    
+    return e;
+}
+----
+
+== Parsing Statements
+
+Statements live inside `{% ... %}` blocks. The statement parser works at
+the template level, consuming template tokens:
+
+[source,cpp]
+----
+// Template token: {% for item in items %}
+// Statement text: "for item in items"
+// We need to:
+//   1. Identify the statement type (first word: "for")
+//   2. Parse the rest as an expression or custom syntax
+
+std::vector<StmtPtr> parse_body(until_keywords) {
+    std::vector<StmtPtr> body;
+    
+    while (has_more_tokens()) {
+        auto tmpl_tok = peek_template_token();
+        
+        if (tmpl_tok.type == TemplateTokenType::Text) {
+            body.push_back(make_text(tmpl_tok.value));
+            advance_template();
+        }
+        else if (tmpl_tok.type == TemplateTokenType::VarExpr) {
+            auto expr = parse_expression(tmpl_tok.value);
+            body.push_back(make_output(std::move(expr)));
+            advance_template();
+        }
+        else if (tmpl_tok.type == TemplateTokenType::BlockExpr) {
+            auto keyword = first_word(tmpl_tok.value);
+            
+            if (until_keywords.contains(keyword))
+                break;  // this block ends here
+            
+            if (keyword == "for")
+                body.push_back(parse_for());
+            else if (keyword == "if")
+                body.push_back(parse_if());
+            else if (keyword == "set")
+                body.push_back(parse_set());
+            else
+                throw error("Unknown statement: " + keyword);
+        }
+    }
+    
+    return body;
+}
+----
+
+=== Parsing For Loops
+
+[source,cpp]
+----
+// {% for item in items %}...{% endfor %}
+// {% for key, value in dict.items() %}...{% endfor %}
+
+StmtPtr parse_for() {
+    advance_template();  // consume the {% for ... %} token
+    
+    // Parse: "for IDENT [, IDENT] in EXPR"
+    auto tokens = lex(block_content);       // lex the expression part
+    skip_keyword("for");
+    auto var_name = expect(Ident).text;
+    std::optional<std::string> var_name2;
+    if (at(Comma)) {
+        advance();
+        var_name2 = expect(Ident).text;
+    }
+    expect(KW_In);
+    auto iterable = parse_expression();
+    
+    // Parse body
+    auto body = parse_body({"endfor", "else"});
+    
+    // Optional else clause
+    std::optional<std::vector<StmtPtr>> else_body;
+    if (current_keyword() == "else") {
+        advance_template();
+        else_body = parse_body({"endfor"});
+    }
+    
+    advance_template();  // consume {% endfor %}
+    return make_for(var_name, var_name2, iterable, body, else_body);
+}
+----
+
+=== Parsing If Statements
+
+[source,cpp]
+----
+// {% if cond %}...{% elif cond %}...{% else %}...{% endif %}
+
+StmtPtr parse_if() {
+    std::vector<Branch> branches;
+    
+    // First branch: if
+    auto condition = parse_expression(block_content_after("if"));
+    auto body = parse_body({"elif", "else", "endif"});
+    branches.push_back({std::move(condition), std::move(body)});
+    
+    // Middle branches: elif
+    while (current_keyword() == "elif") {
+        auto cond = parse_expression(block_content_after("elif"));
+        auto elif_body = parse_body({"elif", "else", "endif"});
+        branches.push_back({std::move(cond), std::move(elif_body)});
+    }
+    
+    // Final branch: else (optional)
+    if (current_keyword() == "else") {
+        advance_template();
+        auto else_body = parse_body({"endif"});
+        branches.push_back({nullptr, std::move(else_body)});  // null = always true
+    }
+    
+    advance_template();  // consume {% endif %}
+    return make_if(std::move(branches));
+}
+----
+
+== Error Handling
+
+Good error messages make the difference between "I can debug this" and
+"I want to throw my computer out the window."
+
+[source,cpp]
+----
+Token expect(TokenKind kind) {
+    auto tok = peek();
+    if (tok.kind != kind) {
+        throw ParseError(
+            "Expected " + kind_name(kind) + " but found " + 
+            kind_name(tok.kind) + " '" + tok.text + "'" +
+            " at position " + std::to_string(tok.offset)
+        );
+    }
+    return advance();
+}
+----
+
+== Summary
+
+[IMPORTANT]
+====
+The parser converts a flat token stream into a hierarchical tree. +
+**Recursive descent**: one function per grammar rule. +
+**Precedence**: lower precedence = higher in the call chain. +
+**Postfix ops** (`.`, `[]`, `()`, `|`) are parsed in a loop after primary. +
+**Statements** (for, if, set) are parsed at the template level.
+====
+
+Next: Chapter 4 — The Evaluator.

@@ -1,0 +1,134 @@
+= Building a Jinja2 Template Engine from Scratch in C++23
+:author: tokenizerpp project
+:toc: left
+:toclevels: 3
+:source-highlighter: rouge
+:icons: font
+
+== Introduction
+
+This tutorial walks you through building a working Jinja2 template engine
+from scratch in C++23. By the end, you'll have a real template engine that
+can render HuggingFace chat templates — the same templates used by LLaMA,
+Mistral, Qwen, and other large language models.
+
+We'll cover:
+
+1. **Chapter 1**: What is a template engine? The big picture.
+2. **Chapter 2**: Lexing — turning raw text into tokens.
+3. **Chapter 3**: Parsing — turning tokens into a tree.
+4. **Chapter 4**: Evaluating — walking the tree to produce output.
+5. **Chapter 5**: Putting it all together.
+
+=== Prerequisites
+
+You should know:
+
+- Basic C++ (functions, structs, vectors, strings)
+- What a "grammar" is (you took the automata course — good!)
+- What a tree is (you'll build one)
+
+You do NOT need to know:
+
+- Lex/yacc/bison/ANTLR
+- Compiler theory beyond the basics
+- How Jinja2 works (we'll learn as we build)
+
+=== The Three Phases
+
+Every language processor — whether it's a compiler, interpreter, or template
+engine — works in three phases:
+
+[source]
+----
+    Source Text
+        │
+        ▼
+   ┌─────────┐
+   │  LEXER  │  "Tokenize" — break text into meaningful chunks
+   └────┬────┘
+        │  Tokens
+        ▼
+   ┌─────────┐
+   │ PARSER  │  "Parse" — organize tokens into a tree structure
+   └────┬────┘
+        │  AST (Abstract Syntax Tree)
+        ▼
+   ┌──────────┐
+   │EVALUATOR │  "Render" — walk the tree, produce output
+   └──────────┘
+        │
+        ▼
+    Output Text
+----
+
+Think of it like reading a sentence:
+
+- **Lexer**: "The cat sat on the mat" → [The] [cat] [sat] [on] [the] [mat]
+- **Parser**: Subject="The cat", Verb="sat", Prepositional="on the mat"
+- **Evaluator**: Understand the meaning and act on it
+
+Let's build each phase.
+
+== Chapter 1: What Does a Jinja2 Template Look Like?
+
+A Jinja2 template is a text file with special markers:
+
+[source,jinja]
+----
+Hello {{ name }}!
+
+{% for item in items %}
+  - {{ item }}
+{% endfor %}
+
+{% if show_footer %}
+Thanks!
+{% endif %}
+----
+
+There are three kinds of markers:
+
+[cols="1,2,3"]
+|===
+| Marker | Syntax | Purpose
+
+| Variable | `{{ expr }}` | Evaluate expression, insert result
+| Block | `{% statement %}` | Control flow (for, if, set)
+| Comment | `{# text #}` | Ignored entirely
+|===
+
+Everything else is literal text — just passed through unchanged.
+
+=== Our Goal
+
+Given this template:
+
+[source,jinja]
+----
+{% for message in messages %}
+{{ message.role }}: {{ message.content }}
+{% endfor %}
+----
+
+And this data (in JSON):
+
+[source,json]
+----
+{
+  "messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there!"}
+  ]
+}
+----
+
+Produce this output:
+
+[source]
+----
+user: Hello
+assistant: Hi there!
+----
+
+Let's build it.

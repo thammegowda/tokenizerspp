@@ -1,0 +1,244 @@
+= Chapter 5: Putting It All Together
+:source-highlighter: rouge
+
+== The Complete Pipeline
+
+Let's trace through a real HuggingFace chat template end-to-end.
+
+=== The Template (Qwen2 style)
+
+[source,jinja]
+----
+{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}
+----
+
+=== The Input
+
+[source,json]
+----
+{
+  "messages": [
+    {"role": "user", "content": "Hello!"}
+  ],
+  "add_generation_prompt": true
+}
+----
+
+=== Phase 1: Template Tokenization
+
+The first level lexer splits into template tokens:
+
+[source]
+----
+BlockTag("for message in messages")
+BlockTag("if loop.first and messages[0]['role'] != 'system'")
+VarTag("'<|im_start|>system\\nYou are a helpful assistant.<|im_end|>\\n'")
+BlockTag("endif")
+VarTag("'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'")
+BlockTag("endfor")
+BlockTag("if add_generation_prompt")
+VarTag("'<|im_start|>assistant\\n'")
+BlockTag("endif")
+----
+
+=== Phase 2: Expression Lexing
+
+For each expression inside `{{ }}` or `{% %}`, the expression lexer tokenizes:
+
+[source]
+----
+"for message in messages"
+→ [KW_For, Ident("message"), KW_In, Ident("messages"), Eof]
+
+"loop.first and messages[0]['role'] != 'system'"
+→ [Ident("loop"), Dot, Ident("first"), KW_And, Ident("messages"),
+   LBracket, Integer("0"), RBracket, LBracket, String("role"), RBracket,
+   NotEq, String("system"), Eof]
+----
+
+=== Phase 3: Parsing
+
+The parser builds an AST:
+
+[source]
+----
+Block
+├── For(var="message", iterable=Ident("messages"))
+│   ├── If
+│   │   ├── Branch(condition: And(GetAttr(Ident("loop"), "first"),
+│   │   │                         NotEq(GetItem(GetItem(Ident("messages"), 0), "role"),
+│   │   │                                "system")))
+│   │   │   └── Output(Literal("<|im_start|>system\n..."))
+│   │   └── [end if]
+│   └── Output(BinaryOp("+",
+│                BinaryOp("+", ..., GetItem(Ident("message"), "role")),
+│                ...))
+└── If
+    ├── Branch(condition: Ident("add_generation_prompt"))
+    │   └── Output(Literal("<|im_start|>assistant\n"))
+    └── [end if]
+----
+
+=== Phase 4: Evaluation
+
+The evaluator walks the tree with the input context:
+
+[source]
+----
+1. Enter For: message = {"role": "user", "content": "Hello!"}
+   loop = {index: 1, index0: 0, first: true, last: true, length: 1}
+
+2. Evaluate If condition:
+   loop.first → true
+   messages[0]['role'] → "user"
+   "user" != "system" → true
+   true and true → true
+   
+3. Output: "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+
+4. Evaluate concatenation:
+   "<|im_start|>" + "user" + "\n" + "Hello!" + "<|im_end|>" + "\n"
+
+5. Output: "<|im_start|>user\nHello!<|im_end|>\n"
+
+6. End For loop
+
+7. Evaluate If: add_generation_prompt → true
+
+8. Output: "<|im_start|>assistant\n"
+----
+
+=== Final Output
+
+[source]
+----
+<|im_start|>system
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+Hello!<|im_end|>
+<|im_start|>assistant
+----
+
+This is exactly what the LLM expects as input. The tokenizer then
+encodes this string into token IDs.
+
+== Architecture Diagram
+
+[source]
+----
+┌──────────────────────────────────────────────────────┐
+│  Template String (from tokenizer_config.json)        │
+│  "{% for message in messages %}..."                  │
+└──────────────────────┬───────────────────────────────┘
+                       │
+              ┌────────▼────────┐
+              │  Template Lexer │  Split on {{ }}, {% %}, {# #}
+              └────────┬────────┘
+                       │  TemplateTokens
+              ┌────────▼────────┐
+              │ Expression Lexer│  Tokenize each tag's content
+              └────────┬────────┘
+                       │  Tokens per expression
+              ┌────────▼────────┐
+              │     Parser      │  Recursive descent → AST
+              └────────┬────────┘
+                       │  AST
+              ┌────────▼────────┐
+              │   Evaluator     │  Walk tree with context → string
+              └────────┬────────┘
+                       │  Rendered string
+              ┌────────▼────────┐
+              │   Tokenizer     │  Encode string → token IDs
+              └────────┬────────┘
+                       │
+                  Token IDs → LLM
+----
+
+== Testing Your Implementation
+
+The best way to test a template engine is with real templates. Here's
+a testing strategy:
+
+=== Level 1: Expression evaluation
+[source,cpp]
+----
+// Test individual expressions
+assert(eval("1 + 2") == 3);
+assert(eval("'hello' + ' ' + 'world'") == "hello world");
+assert(eval("items | length", {{"items", {1,2,3}}}) == 3);
+----
+
+=== Level 2: Simple templates
+[source,cpp]
+----
+assert(render("Hello {{ name }}!", {{"name", "World"}}) == "Hello World!");
+assert(render("{% if x %}yes{% else %}no{% endif %}", {{"x", true}}) == "yes");
+----
+
+=== Level 3: Real model templates
+[source,cpp]
+----
+// Test with actual Phi-3, Qwen2, Mistral templates
+auto result = render(phi3_template, {
+    {"messages", {/* ... */}},
+    {"add_generation_prompt", true},
+    {"eos_token", "<|endoftext|>"}
+});
+assert(result.find("<|assistant|>") != string::npos);
+----
+
+=== Level 4: Edge cases
+[source,cpp]
+----
+// Whitespace control
+assert(render("{%- if true -%}x{%- endif -%}") == "x");
+// Negative indexing
+assert(render("{{ items[-1] }}", {{"items", {1,2,3}}}) == "3");
+// Namespace mutation across loop scope
+assert(render("{% set ns = namespace(x=0) %}{% for i in items %}{% set ns.x = ns.x + 1 %}{% endfor %}{{ ns.x }}", {{"items", {1,2,3}}}) == "3");
+----
+
+== Lessons Learned
+
+=== 1. Lex first, parse tokens — not characters
+The single biggest improvement. Every parse method becomes 5x shorter.
+
+=== 2. Separate concerns cleanly
+- Lexer: characters → tokens (handles whitespace, escapes, multi-char ops)
+- Parser: tokens → tree (handles precedence, nesting)
+- Evaluator: tree + context → output (handles semantics)
+
+=== 3. Use std::variant for AST nodes
+The compiler catches missing cases. No more "forgot to handle new node type."
+
+=== 4. Table-drive extensible parts
+Filters and tests are just entries in a map. Adding `| capitalize` is
+one line, not a code change in the parser.
+
+=== 5. Test with real templates early
+Don't build the whole engine before testing. Start with `{{ variable }}`,
+then add `{% if %}`, then `{% for %}`, testing at each step.
+
+=== 6. Error messages matter
+Report position in source. "Expected ')' at position 42" is infinitely
+better than "parse error."
+
+== What We Didn't Build (and Why)
+
+Some Jinja2 features aren't needed for chat templates:
+
+- **Template inheritance** (`extends`, `block`) — chat templates are standalone
+- **Macros** — never used in chat templates
+- **Import/include** — no multi-file templates
+- **HTML escaping** — we're generating plain text, not HTML
+- **Custom delimiters** — all chat templates use the default `{{ }}` / `{% %}`
+
+By omitting these, our implementation is ~1,500 lines instead of ~10,000.
+The right amount of complexity for the job.
+
+== Further Reading
+
+- The formal grammar: `docs/jinja-grammar.md`
+- The Jinja2 documentation: https://jinja.palletsprojects.com/en/stable/templates/
+- "Crafting Interpreters" by Robert Nystrom — excellent book on building parsers
+- "Engineering a Compiler" by Cooper & Torczon — for the theory behind it all
