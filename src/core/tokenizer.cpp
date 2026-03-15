@@ -93,8 +93,36 @@ Result<Encoding> Tokenizer::encode_single(std::string_view input, bool add_speci
         return make_error("No model set on Tokenizer");
     }
 
+    // 0. Split input on added/special tokens.
+    //    Each matched added token becomes a single-token Encoding.
+    //    Non-matching segments go through the full pipeline (normalize → pre-tokenize → model).
+    if (added_vocabulary_ && !added_vocabulary_->get_added_tokens().empty()) {
+        auto segments = added_vocabulary_->split_on_added_tokens(input);
+        Encoding merged;
+        for (auto& seg : segments) {
+            if (seg.id.has_value()) {
+                // This segment is an added token — create a single-token encoding
+                auto id_str = added_vocabulary_->id_to_token(*seg.id).value_or(seg.text);
+                Encoding tok_enc({*seg.id}, {0}, {id_str}, {std::nullopt},
+                                 {Offsets{0, seg.text.size()}}, {1}, {1}, {}, {});
+                merged.merge_with(std::move(tok_enc), true);
+            } else {
+                // Regular text — run through the full pipeline
+                auto enc = encode_segment(seg.text);
+                if (!enc) return std::unexpected(enc.error());
+                merged.merge_with(std::move(*enc), true);
+            }
+        }
+        return merged;
+    }
+
+    return encode_segment(std::string(input));
+}
+
+/// Run the normalize → pre-tokenize → model pipeline on a text segment.
+Result<Encoding> Tokenizer::encode_segment(const std::string& text) const {
     // 1. Create PreTokenizedString
-    PreTokenizedString pretokenized{std::string(input)};
+    PreTokenizedString pretokenized{text};
 
     // 2. Normalize
     if (normalizer_) {

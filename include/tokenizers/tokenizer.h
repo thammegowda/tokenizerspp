@@ -148,8 +148,9 @@ private:
     std::optional<TokenizerConfig> config_;
     mutable std::unordered_map<std::string, ChatTemplate> template_cache_;
 
-    // Internal encode helper
+    // Internal encode helpers
     Result<Encoding> encode_single(std::string_view input, bool add_special_tokens) const;
+    Result<Encoding> encode_segment(const std::string& text) const;
 };
 
 } // namespace tokenizers

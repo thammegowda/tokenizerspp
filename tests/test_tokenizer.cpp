@@ -1033,5 +1033,62 @@ TEST(TokenizerChatTest, NamedTemplates) {
     EXPECT_NE(r2->find("tool: Hi"), std::string::npos);
 }
 
+// ============================================================================
+// Added token splitting during encode
+//
+// When input text contains literal added-token strings (e.g. from chat template
+// rendering), the tokenizer must match them as single tokens — not feed them
+// into the BPE/Unigram model as regular sub-words.
+// ============================================================================
+
+TEST(AddedTokenEncodingTest, SpecialTokensEncodedAsSingleIds) {
+    // Build a minimal WordLevel tokenizer with added tokens
+    // (WordLevel maps whole words to IDs without merging/splitting)
+    std::unordered_map<std::string, TokenId> vocab = {
+        {"hello", 0}, {"world", 1}, {"<bos>", 2}, {"<eos>", 3},
+        {"<start>", 4}, {"<end>", 5},
+    };
+    auto model = std::make_unique<models::WordLevel>(vocab);
+
+    Tokenizer tok(std::move(model));
+
+    // Register added tokens (same as what happens when loading tokenizer.json)
+    tok.add_special_tokens({
+        AddedToken{"<bos>", true},
+        AddedToken{"<eos>", true},
+        AddedToken{"<start>", true},
+        AddedToken{"<end>", true},
+    });
+
+    // Encode text with embedded special tokens
+    auto result = tok.encode("<bos><start>hello<end><eos>", false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    auto& ids = result->get_ids();
+    // Should be: <bos>=2, <start>=4, hello=0, <end>=5, <eos>=3
+    ASSERT_EQ(ids.size(), 5u) << "Expected 5 tokens (3 special + 'hello' + 1 special)";
+    EXPECT_EQ(ids[0], 2);  // <bos>
+    EXPECT_EQ(ids[1], 4);  // <start>
+    EXPECT_EQ(ids[2], 0);  // hello
+    EXPECT_EQ(ids[3], 5);  // <end>
+    EXPECT_EQ(ids[4], 3);  // <eos>
+}
+
+TEST(AddedTokenEncodingTest, NoAddedTokensPassThrough) {
+    // Without added tokens, angle-bracket strings go through the model normally
+    std::unordered_map<std::string, TokenId> vocab = {
+        {"hello", 0}, {"world", 1}, {"<", 2}, {">", 3}, {"b", 4}, {"o", 5}, {"s", 6},
+    };
+    models::MergeMap merges;
+    auto model = std::make_unique<models::BPE>(vocab, merges);
+    Tokenizer tok(std::move(model));
+
+    // No added tokens registered — "<bos>" will be split by BPE
+    auto result = tok.encode("<bos>hello", false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    // "<bos>" would be split into subwords, not a single token
+    EXPECT_GT(result->get_ids().size(), 2u);
+}
+
 } // namespace
 } // namespace tokenizers
