@@ -52,8 +52,8 @@ public:
     Result<void> tokenize(TokenizeFn tokenize_fn);
 
     /// Convert to an Encoding.
-    Result<Encoding> into_encoding(std::optional<uint32_t> word_idx,
-                                   uint32_t type_id,
+    Result<Encoding> into_encoding(std::optional<TokenId> word_idx,
+                                   TokenId type_id,
                                    OffsetType offset_type) const;
 
     /// Get splits info for inspection.

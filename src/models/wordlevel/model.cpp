@@ -4,7 +4,7 @@
 namespace tokenizers {
 namespace models {
 
-WordLevel::WordLevel(std::unordered_map<std::string, uint32_t> vocab,
+WordLevel::WordLevel(std::unordered_map<std::string, TokenId> vocab,
                      std::string unk_token)
     : vocab_(std::move(vocab)), unk_token_(std::move(unk_token)) {
     vocab_r_.reserve(vocab_.size());
@@ -28,19 +28,19 @@ Result<std::vector<Token>> WordLevel::tokenize(std::string_view sequence) const 
     return make_error("WordLevel: unknown token and no UNK token in vocabulary");
 }
 
-std::optional<uint32_t> WordLevel::token_to_id(std::string_view token) const {
+std::optional<TokenId> WordLevel::token_to_id(std::string_view token) const {
     auto it = vocab_.find(std::string(token));
     if (it != vocab_.end()) return it->second;
     return std::nullopt;
 }
 
-std::optional<std::string> WordLevel::id_to_token(uint32_t id) const {
+std::optional<std::string> WordLevel::id_to_token(TokenId id) const {
     auto it = vocab_r_.find(id);
     if (it != vocab_r_.end()) return it->second;
     return std::nullopt;
 }
 
-std::unordered_map<std::string, uint32_t> WordLevel::get_vocab() const {
+std::unordered_map<std::string, TokenId> WordLevel::get_vocab() const {
     return vocab_;
 }
 

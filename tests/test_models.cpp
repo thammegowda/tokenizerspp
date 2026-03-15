@@ -6,7 +6,7 @@ namespace tokenizers {
 namespace {
 
 TEST(WordPieceTest, BasicTokenize) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"[CLS]", 1}, {"[SEP]", 2},
         {"want", 3}, {"##want", 4}, {"##ed", 5}, {"wa", 6}, {"un", 7},
         {"runn", 8}, {"##ing", 9},
@@ -29,7 +29,7 @@ TEST(WordPieceTest, BasicTokenize) {
 }
 
 TEST(WordPieceTest, UnknownToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1},
     };
 
@@ -43,7 +43,7 @@ TEST(WordPieceTest, UnknownToken) {
 }
 
 TEST(WordPieceTest, WholeWord) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
 
@@ -57,7 +57,7 @@ TEST(WordPieceTest, WholeWord) {
 }
 
 TEST(WordPieceTest, MaxInputChars) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"a", 1},
     };
 
@@ -71,7 +71,7 @@ TEST(WordPieceTest, MaxInputChars) {
 }
 
 TEST(WordPieceTest, TokenToId) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"##world", 2},
     };
     models::WordPiece wp(vocab);
@@ -83,7 +83,7 @@ TEST(WordPieceTest, TokenToId) {
 }
 
 TEST(WordPieceTest, IdToToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1},
     };
     models::WordPiece wp(vocab);
@@ -94,7 +94,7 @@ TEST(WordPieceTest, IdToToken) {
 }
 
 TEST(WordPieceTest, VocabSize) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     models::WordPiece wp(vocab);
@@ -132,7 +132,7 @@ using models::MergeMap;
 TEST(BPETest, BasicMerges) {
     // vocab: a=0, b=1, ab=2
     // merges: (0,1) → (rank=0, new_id=2)
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1}, {"ab", 2}, {"<unk>", 3},
     };
     MergeMap merges = {{{0, 1}, {0, 2}}};
@@ -146,7 +146,7 @@ TEST(BPETest, BasicMerges) {
 }
 
 TEST(BPETest, UnknownToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"<unk>", 1},
     };
     MergeMap merges;
@@ -161,7 +161,7 @@ TEST(BPETest, UnknownToken) {
 TEST(BPETest, MultipleMerges) {
     // vocab: a=0, b=1, c=2, ab=3, abc=4
     // merges: (0,1)→(rank=0, 3), (3,2)→(rank=1, 4)
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1}, {"c", 2}, {"ab", 3}, {"abc", 4},
     };
     MergeMap merges = {{{0, 1}, {0, 3}}, {{3, 2}, {1, 4}}};
@@ -177,7 +177,7 @@ TEST(BPETest, MultipleMerges) {
 TEST(BPETest, ByteOffsets) {
     // vocab: a=0, b=1, c=2, ab=3
     // merges: (0,1)→(0,3) — "ab" merges but "c" stays separate
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1}, {"c", 2}, {"ab", 3},
     };
     MergeMap merges = {{{0, 1}, {0, 3}}};
@@ -192,7 +192,7 @@ TEST(BPETest, ByteOffsets) {
 }
 
 TEST(BPETest, NoMerges) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"h", 0}, {"e", 1}, {"l", 2}, {"o", 3},
     };
     MergeMap merges;
@@ -207,7 +207,7 @@ TEST(BPETest, NoMerges) {
 }
 
 TEST(BPETest, EmptyInput) {
-    std::unordered_map<std::string, uint32_t> vocab = {{"a", 0}};
+    std::unordered_map<std::string, TokenId> vocab = {{"a", 0}};
     MergeMap merges;
     models::BPE bpe(vocab, merges);
     auto result = bpe.tokenize("");
@@ -216,7 +216,7 @@ TEST(BPETest, EmptyInput) {
 }
 
 TEST(BPETest, TokenToId) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1}, {"ab", 2},
     };
     MergeMap merges;
@@ -227,7 +227,7 @@ TEST(BPETest, TokenToId) {
 }
 
 TEST(BPETest, IdToToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1},
     };
     MergeMap merges;
@@ -238,7 +238,7 @@ TEST(BPETest, IdToToken) {
 }
 
 TEST(BPETest, VocabSize) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1}, {"ab", 2},
     };
     MergeMap merges;
@@ -247,7 +247,7 @@ TEST(BPETest, VocabSize) {
 }
 
 TEST(BPETest, FuseUnk) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"<unk>", 1},
     };
     MergeMap merges;
@@ -263,7 +263,7 @@ TEST(BPETest, FuseUnk) {
 
 TEST(BPETest, ContinuingSubwordPrefix) {
     // With continuing_subword_prefix="##", non-first chars look up "##<char>"
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"##b", 1}, {"##c", 2},
     };
     MergeMap merges;
@@ -281,7 +281,7 @@ TEST(BPETest, ContinuingSubwordPrefix) {
 
 TEST(BPETest, EndOfWordSuffix) {
     // Last char gets suffix appended
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b</w>", 1},
     };
     MergeMap merges;
@@ -297,7 +297,7 @@ TEST(BPETest, EndOfWordSuffix) {
 
 TEST(BPETest, ByteFallback) {
     // Char 'ñ' (U+00F1) = 0xC3 0xB1 in UTF-8
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"<0xC3>", 1}, {"<0xB1>", 2},
     };
     MergeMap merges;
@@ -314,7 +314,7 @@ TEST(BPETest, ByteFallback) {
 
 TEST(BPETest, IgnoreMerges) {
     // If ignore_merges=true and whole word is in vocab, skip merging
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"a", 0}, {"b", 1}, {"ab", 2},
     };
     MergeMap merges = {{{0, 1}, {0, 2}}};
@@ -331,7 +331,7 @@ TEST(BPETest, IgnoreMerges) {
 // ===== WordLevel Model =====
 
 TEST(WordLevelTest, BasicLookup) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     models::WordLevel wl(vocab);
@@ -345,7 +345,7 @@ TEST(WordLevelTest, BasicLookup) {
 }
 
 TEST(WordLevelTest, UnknownToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1},
     };
     models::WordLevel wl(vocab);
@@ -359,7 +359,7 @@ TEST(WordLevelTest, UnknownToken) {
 }
 
 TEST(WordLevelTest, MissingUnkToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"hello", 0},
     };
     models::WordLevel wl(vocab);
@@ -369,7 +369,7 @@ TEST(WordLevelTest, MissingUnkToken) {
 }
 
 TEST(WordLevelTest, EmptyInput) {
-    std::unordered_map<std::string, uint32_t> vocab = {{"a", 0}};
+    std::unordered_map<std::string, TokenId> vocab = {{"a", 0}};
     models::WordLevel wl(vocab);
 
     auto result = wl.tokenize("");
@@ -378,7 +378,7 @@ TEST(WordLevelTest, EmptyInput) {
 }
 
 TEST(WordLevelTest, TokenToId) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     models::WordLevel wl(vocab);
@@ -389,7 +389,7 @@ TEST(WordLevelTest, TokenToId) {
 }
 
 TEST(WordLevelTest, IdToToken) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1},
     };
     models::WordLevel wl(vocab);
@@ -400,7 +400,7 @@ TEST(WordLevelTest, IdToToken) {
 }
 
 TEST(WordLevelTest, VocabSize) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     models::WordLevel wl(vocab);

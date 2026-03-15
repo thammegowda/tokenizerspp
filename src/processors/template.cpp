@@ -42,7 +42,7 @@ Result<std::vector<Encoding>> TemplateProcessing::process_encodings(
             if (idx < encodings.size()) {
                 Encoding enc = encodings[idx];
                 // Set type_ids to the piece's type_id
-                std::vector<uint32_t> type_ids(enc.len(), piece.type_id);
+                std::vector<TokenId> type_ids(enc.len(), piece.type_id);
                 enc.set_type_ids(std::move(type_ids));
                 enc.set_sequence_id(idx);
                 result.push_back(std::move(enc));
@@ -55,12 +55,12 @@ Result<std::vector<Encoding>> TemplateProcessing::process_encodings(
                     size_t len = st.ids.size();
                     Encoding enc(
                         st.ids,
-                        std::vector<uint32_t>(len, piece.type_id),
+                        std::vector<TokenId>(len, piece.type_id),
                         st.tokens,
-                        std::vector<std::optional<uint32_t>>(len, std::nullopt),
+                        std::vector<std::optional<TokenId>>(len, std::nullopt),
                         std::vector<Offsets>(len, {0, 0}),
-                        std::vector<uint32_t>(len, 1),  // special_tokens_mask
-                        std::vector<uint32_t>(len, 1),  // attention_mask
+                        std::vector<TokenId>(len, 1),  // special_tokens_mask
+                        std::vector<TokenId>(len, 1),  // attention_mask
                         {},
                         {}
                     );

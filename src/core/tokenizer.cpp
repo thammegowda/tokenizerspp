@@ -6,6 +6,8 @@
 
 namespace tokenizers {
 
+Tokenizer::Tokenizer() = default;
+
 Tokenizer::Tokenizer(ModelPtr model)
     : model_(std::move(model)),
       added_vocabulary_(std::make_unique<AddedVocabulary>()) {}
@@ -50,7 +52,7 @@ size_t Tokenizer::get_vocab_size() const {
     return size;
 }
 
-std::optional<uint32_t> Tokenizer::token_to_id(std::string_view token) const {
+std::optional<TokenId> Tokenizer::token_to_id(std::string_view token) const {
     if (model_) {
         auto id = model_->token_to_id(token);
         if (id) return id;
@@ -61,7 +63,7 @@ std::optional<uint32_t> Tokenizer::token_to_id(std::string_view token) const {
     return std::nullopt;
 }
 
-std::optional<std::string> Tokenizer::id_to_token(uint32_t id) const {
+std::optional<std::string> Tokenizer::id_to_token(TokenId id) const {
     if (model_) {
         auto tok = model_->id_to_token(id);
         if (tok) return tok;
@@ -213,7 +215,7 @@ Result<std::vector<Encoding>> Tokenizer::encode_batch(
     return results;
 }
 
-Result<std::string> Tokenizer::decode(const std::vector<uint32_t>& ids,
+Result<std::string> Tokenizer::decode(const std::vector<TokenId>& ids,
                                        bool skip_special_tokens) const {
     if (!model_) {
         return make_error("No model set on Tokenizer");
@@ -222,7 +224,7 @@ Result<std::string> Tokenizer::decode(const std::vector<uint32_t>& ids,
     std::vector<std::string> tokens;
     tokens.reserve(ids.size());
 
-    for (uint32_t id : ids) {
+    for (TokenId id : ids) {
         auto tok = model_->id_to_token(id);
         if (!tok) {
             // Check added vocabulary
@@ -254,7 +256,7 @@ Result<std::string> Tokenizer::decode(const std::vector<uint32_t>& ids,
 }
 
 Result<std::vector<std::string>> Tokenizer::decode_batch(
-    const std::vector<std::vector<uint32_t>>& batch_ids,
+    const std::vector<std::vector<TokenId>>& batch_ids,
     bool skip_special_tokens) const {
     std::vector<std::string> results;
     results.reserve(batch_ids.size());

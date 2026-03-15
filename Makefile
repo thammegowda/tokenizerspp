@@ -1,11 +1,11 @@
 .PHONY: build debug bench bench-build bench-run clean
 
 build:
-	cmake -B build-release -S . -DCMAKE_BUILD_TYPE=Release
+	cmake -B build-release -S . -GNinja -DCMAKE_BUILD_TYPE=Release
 	cmake --build build-release -j
 
 debug:
-	cmake -B build-debug -S . -DCMAKE_BUILD_TYPE=Debug
+	cmake -B build-debug -S . -GNinja -DCMAKE_BUILD_TYPE=Debug
 	cmake --build build-debug -j
 
 bench: bench-build bench-run

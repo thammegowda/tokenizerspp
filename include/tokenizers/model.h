@@ -26,15 +26,15 @@ public:
     tokenize(std::string_view sequence) const = 0;
 
     /// Look up the ID for a token string. Returns nullopt if not found.
-    [[nodiscard]] virtual std::optional<uint32_t>
+    [[nodiscard]] virtual std::optional<TokenId>
     token_to_id(std::string_view token) const = 0;
 
     /// Look up the token string for an ID. Returns nullopt if not found.
     [[nodiscard]] virtual std::optional<std::string>
-    id_to_token(uint32_t id) const = 0;
+    id_to_token(TokenId id) const = 0;
 
     /// Get the full vocabulary mapping (token → id).
-    [[nodiscard]] virtual std::unordered_map<std::string, uint32_t>
+    [[nodiscard]] virtual std::unordered_map<std::string, TokenId>
     get_vocab() const = 0;
 
     /// Get the vocabulary size.

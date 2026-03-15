@@ -15,10 +15,10 @@ namespace processors {
 /// BERT post-processor: adds [CLS] at beginning and [SEP] at end.
 class BertProcessing : public PostProcessor {
 public:
-    std::pair<std::string, uint32_t> sep;
-    std::pair<std::string, uint32_t> cls;
+    std::pair<std::string, TokenId> sep;
+    std::pair<std::string, TokenId> cls;
 
-    BertProcessing(std::pair<std::string, uint32_t> sep, std::pair<std::string, uint32_t> cls)
+    BertProcessing(std::pair<std::string, TokenId> sep, std::pair<std::string, TokenId> cls)
         : sep(std::move(sep)), cls(std::move(cls)) {}
 
     [[nodiscard]] size_t added_tokens(bool is_pair) const override;
@@ -29,13 +29,13 @@ public:
 /// RoBERTa post-processor: similar to BERT but with different type_id handling.
 class RobertaProcessing : public PostProcessor {
 public:
-    std::pair<std::string, uint32_t> sep;
-    std::pair<std::string, uint32_t> cls;
+    std::pair<std::string, TokenId> sep;
+    std::pair<std::string, TokenId> cls;
     bool trim_offsets = true;
     bool add_prefix_space = true;
 
-    RobertaProcessing(std::pair<std::string, uint32_t> sep,
-                      std::pair<std::string, uint32_t> cls,
+    RobertaProcessing(std::pair<std::string, TokenId> sep,
+                      std::pair<std::string, TokenId> cls,
                       bool trim_offsets = true, bool add_prefix_space = true)
         : sep(std::move(sep)), cls(std::move(cls)),
           trim_offsets(trim_offsets), add_prefix_space(add_prefix_space) {}
@@ -65,13 +65,13 @@ struct TemplatePiece {
     enum Kind { Sequence, SpecialToken } kind;
     TemplateSequence sequence = TemplateSequence::A;
     std::string special_token;
-    uint32_t type_id = 0;
+    TokenId type_id = 0;
 };
 
 struct SpecialTokenDef {
     std::string id;
-    uint32_t token_id = 0;
-    std::vector<uint32_t> ids;
+    TokenId token_id = 0;
+    std::vector<TokenId> ids;
     std::vector<std::string> tokens;
 };
 

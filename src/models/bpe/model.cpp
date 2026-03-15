@@ -20,7 +20,7 @@ size_t utf8_char_len(uint8_t b) {
 
 } // namespace
 
-BPE::BPE(std::unordered_map<std::string, uint32_t> vocab,
+BPE::BPE(std::unordered_map<std::string, TokenId> vocab,
          MergeMap merges,
          std::optional<std::string> unk_token,
          std::optional<std::string> continuing_subword_prefix,
@@ -110,11 +110,11 @@ Result<std::vector<Token>> BPE::merge_word_uncached(std::string_view sequence) c
 
         auto vit = vocab_.find(token_str);
         if (vit != vocab_.end()) {
-            word.add(vit->second, static_cast<uint32_t>(clen));
+            word.add(vit->second, static_cast<TokenId>(clen));
         } else if (byte_fallback_) {
             // Use byte-level fallback tokens like <0xHH>
             bool all_found = true;
-            std::vector<std::pair<uint32_t, uint32_t>> byte_tokens;
+            std::vector<std::pair<TokenId, TokenId>> byte_tokens;
             for (size_t b = 0; b < clen; ++b) {
                 char hex[7];
                 std::snprintf(hex, sizeof(hex), "<0x%02X>",
@@ -133,13 +133,13 @@ Result<std::vector<Token>> BPE::merge_word_uncached(std::string_view sequence) c
             } else if (unk_token_) {
                 auto uit = vocab_.find(*unk_token_);
                 if (uit != vocab_.end()) {
-                    word.add(uit->second, static_cast<uint32_t>(clen));
+                    word.add(uit->second, static_cast<TokenId>(clen));
                 }
             }
         } else if (unk_token_) {
             auto uit = vocab_.find(*unk_token_);
             if (uit != vocab_.end()) {
-                word.add(uit->second, static_cast<uint32_t>(clen));
+                word.add(uit->second, static_cast<TokenId>(clen));
             }
         }
 
@@ -156,7 +156,7 @@ Result<std::vector<Token>> BPE::merge_word_uncached(std::string_view sequence) c
     if (fuse_unk_ && unk_token_) {
         auto uit = vocab_.find(*unk_token_);
         if (uit != vocab_.end()) {
-            uint32_t unk_id = uit->second;
+            TokenId unk_id = uit->second;
             std::vector<Token> fused;
             for (auto& tok : tokens) {
                 if (tok.id == unk_id && !fused.empty() && fused.back().id == unk_id) {
@@ -176,19 +176,19 @@ Result<std::vector<Token>> BPE::tokenize(std::string_view sequence) const {
     return merge_word(sequence);
 }
 
-std::optional<uint32_t> BPE::token_to_id(std::string_view token) const {
+std::optional<TokenId> BPE::token_to_id(std::string_view token) const {
     auto it = vocab_.find(std::string(token));
     if (it != vocab_.end()) return it->second;
     return std::nullopt;
 }
 
-std::optional<std::string> BPE::id_to_token(uint32_t id) const {
+std::optional<std::string> BPE::id_to_token(TokenId id) const {
     auto it = vocab_r_.find(id);
     if (it != vocab_r_.end()) return it->second;
     return std::nullopt;
 }
 
-std::unordered_map<std::string, uint32_t> BPE::get_vocab() const {
+std::unordered_map<std::string, TokenId> BPE::get_vocab() const {
     return vocab_;
 }
 

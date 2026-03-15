@@ -32,7 +32,7 @@ size_t last_char_len(std::string_view s, size_t end) {
 
 } // namespace
 
-WordPiece::WordPiece(std::unordered_map<std::string, uint32_t> vocab,
+WordPiece::WordPiece(std::unordered_map<std::string, TokenId> vocab,
                      std::string unk_token,
                      std::string continuing_subword_prefix,
                      size_t max_input_chars_per_word)
@@ -100,19 +100,19 @@ Result<std::vector<Token>> WordPiece::tokenize(std::string_view sequence) const 
     return sub_tokens;
 }
 
-std::optional<uint32_t> WordPiece::token_to_id(std::string_view token) const {
+std::optional<TokenId> WordPiece::token_to_id(std::string_view token) const {
     auto it = vocab_.find(std::string(token));
     if (it != vocab_.end()) return it->second;
     return std::nullopt;
 }
 
-std::optional<std::string> WordPiece::id_to_token(uint32_t id) const {
+std::optional<std::string> WordPiece::id_to_token(TokenId id) const {
     auto it = vocab_r_.find(id);
     if (it != vocab_r_.end()) return it->second;
     return std::nullopt;
 }
 
-std::unordered_map<std::string, uint32_t> WordPiece::get_vocab() const {
+std::unordered_map<std::string, TokenId> WordPiece::get_vocab() const {
     return vocab_;
 }
 

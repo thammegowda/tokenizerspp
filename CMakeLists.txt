@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(tokenizerpp VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# C++23 is set per-target (not globally) so that parent projects embedding
+# tokenizerpp alongside C++17 libraries (e.g. ONNX Runtime) are not affected.
+# When building standalone, default to C++23.
+if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 23)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -111,6 +116,7 @@ set(TOKENIZERPP_SOURCES
     src/decoders/strip.cpp
     src/decoders/wordpiece.cpp
     src/decoders/sequence.cpp
+    src/decoders/replace.cpp
 
     src/utils/regex.cpp
     src/utils/padding.cpp
@@ -120,6 +126,7 @@ set(TOKENIZERPP_SOURCES
 )
 
 add_library(tokenizerpp STATIC ${TOKENIZERPP_SOURCES})
+target_compile_features(tokenizerpp PUBLIC cxx_std_23)
 target_include_directories(tokenizerpp
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

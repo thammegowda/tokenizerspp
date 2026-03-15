@@ -113,5 +113,19 @@ public:
     decode_chain(std::vector<std::string> tokens) const override;
 };
 
+/// Replace decoder: replaces all occurrences of a pattern string with content.
+class ReplaceDecoder : public Decoder {
+public:
+    std::string pattern;
+    std::string content;
+
+    ReplaceDecoder() = default;
+    ReplaceDecoder(std::string pattern, std::string content)
+        : pattern(std::move(pattern)), content(std::move(content)) {}
+
+    Result<std::vector<std::string>>
+    decode_chain(std::vector<std::string> tokens) const override;
+};
+
 } // namespace decoders
 } // namespace tokenizers
