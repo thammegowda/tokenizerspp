@@ -938,13 +938,16 @@ std::string test_dir() {
     return p.parent_path().string();
 }
 
+const std::string GEMMA3_TEMPLATE = read_file(test_dir() + "/chat-templates/gemma3.jinja");
+const std::string TRANSLATE_GEMMA_TEMPLATE = read_file(test_dir() + "/chat-templates/translate-gemma.jinja");
+
+
 } // anonymous namespace
 
 TEST(GemmaTranslateTest, SingleUserTurn) {
-    std::string tmpl = read_file(test_dir() + "/translate-gemma.chat-template.jinja");
-    ASSERT_FALSE(tmpl.empty()) << "Failed to read template file";
+    ASSERT_FALSE(TRANSLATE_GEMMA_TEMPLATE.empty()) << "Failed to read template file";
 
-    ChatTemplate ct(tmpl, "<bos>", "<eos>");
+    ChatTemplate ct(TRANSLATE_GEMMA_TEMPLATE, "<bos>", "<eos>");
 
     json messages = json::array({
         {{"role", "user"},
@@ -969,10 +972,9 @@ TEST(GemmaTranslateTest, SingleUserTurn) {
 }
 
 TEST(GemmaTranslateTest, MultiTurnWithAssistant) {
-    std::string tmpl = read_file(test_dir() + "/translate-gemma.chat-template.jinja");
-    ASSERT_FALSE(tmpl.empty());
+    ASSERT_FALSE(TRANSLATE_GEMMA_TEMPLATE.empty()) << "Failed to read template file";
 
-    ChatTemplate ct(tmpl, "<bos>", "<eos>");
+    ChatTemplate ct(TRANSLATE_GEMMA_TEMPLATE, "<bos>", "<eos>");
 
     json messages = json::array({
         {{"role", "user"},
@@ -994,10 +996,9 @@ TEST(GemmaTranslateTest, MultiTurnWithAssistant) {
 }
 
 TEST(GemmaTranslateTest, UnderscoreLangCode) {
-    std::string tmpl = read_file(test_dir() + "/translate-gemma.chat-template.jinja");
-    ASSERT_FALSE(tmpl.empty());
+    ASSERT_FALSE(TRANSLATE_GEMMA_TEMPLATE.empty()) << "Failed to read template file";
 
-    ChatTemplate ct(tmpl, "<bos>", "<eos>");
+    ChatTemplate ct(TRANSLATE_GEMMA_TEMPLATE, "<bos>", "<eos>");
 
     // Use underscore lang code — template uses replace("_", "-")
     json messages = json::array({
@@ -1017,4 +1018,135 @@ TEST(GemmaTranslateTest, UnderscoreLangCode) {
     EXPECT_TRUE(result->find("Portuguese") != std::string::npos);
     EXPECT_TRUE(result->find("Spanish") != std::string::npos);
     EXPECT_TRUE(result->find("pt-BR") != std::string::npos);
+}
+
+// ============================================================================
+// Gemma3 standard chat template (the one used by google/gemma-3-1b-it)
+// Reference outputs verified against HuggingFace transformers Python library.
+// ============================================================================
+
+
+TEST(Gemma3ChatTest, SimpleUserMessage) {
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {{"user", "Hello, world!"}};
+    auto result = ct.apply(msgs, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // Reference: '<bos><start_of_turn>user\nHello, world!<end_of_turn>\n<start_of_turn>model\n'
+    EXPECT_EQ(*result, "<bos><start_of_turn>user\nHello, world!<end_of_turn>\n<start_of_turn>model\n");
+}
+
+TEST(Gemma3ChatTest, SimpleUserMessageNoGen) {
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {{"user", "Hello, world!"}};
+    auto result = ct.apply(msgs, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // Reference: '<bos><start_of_turn>user\nHello, world!<end_of_turn>\n'
+    EXPECT_EQ(*result, "<bos><start_of_turn>user\nHello, world!<end_of_turn>\n");
+}
+
+TEST(Gemma3ChatTest, SystemPlusUser) {
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {
+        {"system", "You are a helpful assistant."},
+        {"user", "What is 2+2?"}
+    };
+    auto result = ct.apply(msgs, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // Reference: '<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWhat is 2+2?<end_of_turn>\n<start_of_turn>model\n'
+    EXPECT_EQ(*result, "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWhat is 2+2?<end_of_turn>\n<start_of_turn>model\n");
+}
+
+TEST(Gemma3ChatTest, SystemPlusUserNoGen) {
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {
+        {"system", "You are a helpful assistant."},
+        {"user", "What is 2+2?"}
+    };
+    auto result = ct.apply(msgs, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    EXPECT_EQ(*result, "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWhat is 2+2?<end_of_turn>\n");
+}
+
+TEST(Gemma3ChatTest, MultiTurn) {
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {
+        {"user", "Hi"},
+        {"assistant", "Hello!"},
+        {"user", "How are you?"}
+    };
+    auto result = ct.apply(msgs, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // Reference: '<bos><start_of_turn>user\nHi<end_of_turn>\n<start_of_turn>model\nHello!<end_of_turn>\n<start_of_turn>user\nHow are you?<end_of_turn>\n<start_of_turn>model\n'
+    EXPECT_EQ(*result, "<bos><start_of_turn>user\nHi<end_of_turn>\n<start_of_turn>model\nHello!<end_of_turn>\n<start_of_turn>user\nHow are you?<end_of_turn>\n<start_of_turn>model\n");
+}
+
+TEST(Gemma3ChatTest, MultiTurnNoGen) {
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {
+        {"user", "Hi"},
+        {"assistant", "Hello!"},
+        {"user", "How are you?"}
+    };
+    auto result = ct.apply(msgs, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    EXPECT_EQ(*result, "<bos><start_of_turn>user\nHi<end_of_turn>\n<start_of_turn>model\nHello!<end_of_turn>\n<start_of_turn>user\nHow are you?<end_of_turn>\n");
+}
+
+TEST(Gemma3ChatTest, AssistantRoleMappedToModel) {
+    // Gemma3 maps "assistant" -> "model" in the output
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {
+        {"user", "Test"},
+        {"assistant", "Response"}
+    };
+    auto result = ct.apply(msgs, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // "assistant" role should appear as "model" in output
+    EXPECT_TRUE(result->find("<start_of_turn>model") != std::string::npos);
+    EXPECT_TRUE(result->find("<start_of_turn>assistant") == std::string::npos);
+}
+
+TEST(Gemma3ChatTest, SystemMessagePrefixedToFirstUser) {
+    // System message content is prepended to first user message, not as separate turn
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {
+        {"system", "Be concise."},
+        {"user", "Explain ML."}
+    };
+    auto result = ct.apply(msgs, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // System content + "\n\n" + user content in the same turn
+    EXPECT_TRUE(result->find("Be concise.\n\nExplain ML.") != std::string::npos);
+    // No separate "system" turn
+    EXPECT_TRUE(result->find("<start_of_turn>system") == std::string::npos);
+}
+
+TEST(Gemma3ChatTest, WhitespaceTrimming) {
+    // The template uses {{ message['content'] | trim }}
+    ChatTemplate ct(GEMMA3_TEMPLATE, "<bos>", "<eos>");
+
+    std::vector<ChatMessage> msgs = {{"user", "  Hello  "}};
+    auto result = ct.apply(msgs, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    // Content should be trimmed
+    EXPECT_TRUE(result->find("Hello<end_of_turn>") != std::string::npos);
+    // No leading/trailing spaces around "Hello"
+    EXPECT_TRUE(result->find("  Hello") == std::string::npos);
 }
