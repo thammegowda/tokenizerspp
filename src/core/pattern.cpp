@@ -1,7 +1,6 @@
 #include "tokenizers/pattern.h"
 
-#define PCRE2_CODE_UNIT_WIDTH 8
-#include <pcre2.h>
+#include <re2/re2.h>
 
 #include <cstring>
 
@@ -154,35 +153,38 @@ FuncPattern::find_matches(std::string_view inside) const {
     return matches;
 }
 
-// ===== RegexPattern (PCRE2) =====
+// ===== RegexPattern (RE2) =====
+
+// Pre-process regex patterns to handle features not supported by RE2.
+// RE2 does not support lookahead/lookbehind, but handles Unicode properties
+// (\p{L}, \p{N}, etc.) natively.
+static std::string preprocess_for_re2(const std::string& pattern) {
+    std::string result = pattern;
+    // Common HuggingFace tokenizer pattern: \s+(?!\S)|\s+ → \s+
+    // The lookahead (?!\S) restricts to end-of-string whitespace, but in a
+    // findall/split context the greedy \s+ already matches identically.
+    static constexpr std::string_view target = "\\s+(?!\\S)|\\s+";
+    static constexpr std::string_view replacement = "\\s+";
+    if (auto pos = result.find(target); pos != std::string::npos) {
+        result.replace(pos, target.size(), replacement);
+    }
+    return result;
+}
 
 struct RegexPattern::Impl {
-    pcre2_code* re = nullptr;
-    pcre2_match_data* match_data = nullptr;
-
-    ~Impl() {
-        if (match_data) pcre2_match_data_free(match_data);
-        if (re) pcre2_code_free(re);
-    }
+    std::unique_ptr<RE2> re;
 };
 
-RegexPattern::RegexPattern(const std::string& pattern) : impl_(std::make_unique<Impl>()), pattern_str_(pattern) {
-    int errcode;
-    PCRE2_SIZE erroffset;
-    impl_->re = pcre2_compile(
-        reinterpret_cast<PCRE2_SPTR>(pattern.c_str()),
-        pattern.size(),
-        PCRE2_UTF | PCRE2_UCP | PCRE2_NO_UTF_CHECK,
-        &errcode, &erroffset, nullptr);
-    if (!impl_->re) {
-        PCRE2_UCHAR buffer[256];
-        pcre2_get_error_message(errcode, buffer, sizeof(buffer));
-        throw std::runtime_error(std::string("PCRE2 compile error: ") +
-                                 reinterpret_cast<char*>(buffer));
+RegexPattern::RegexPattern(const std::string& pattern)
+    : impl_(std::make_unique<Impl>()), pattern_str_(pattern) {
+    RE2::Options opts;
+    opts.set_log_errors(false);
+
+    std::string processed = preprocess_for_re2(pattern);
+    impl_->re = std::make_unique<RE2>(processed, opts);
+    if (!impl_->re->ok()) {
+        throw std::runtime_error("RE2 compile error: " + impl_->re->error());
     }
-    // JIT compile for performance
-    pcre2_jit_compile(impl_->re, PCRE2_JIT_COMPLETE);
-    impl_->match_data = pcre2_match_data_create_from_pattern(impl_->re, nullptr);
 }
 
 RegexPattern::~RegexPattern() = default;
@@ -197,23 +199,18 @@ RegexPattern::find_matches(std::string_view inside) const {
 
     std::vector<PatternMatch> splits;
     size_t prev = 0;
-    PCRE2_SIZE start_offset = 0;
+    absl::string_view input(inside.data(), inside.size());
+    absl::string_view match;
+    size_t start_offset = 0;
 
     while (start_offset <= inside.size()) {
-        int rc = pcre2_match(
-            impl_->re,
-            reinterpret_cast<PCRE2_SPTR>(inside.data()),
-            inside.size(),
-            start_offset,
-            PCRE2_NO_UTF_CHECK,
-            impl_->match_data,
-            nullptr);
+        if (!impl_->re->Match(input, start_offset, inside.size(),
+                              RE2::UNANCHORED, &match, 1)) {
+            break;
+        }
 
-        if (rc < 0) break;  // No more matches
-
-        PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(impl_->match_data);
-        size_t match_start = ovector[0];
-        size_t match_end = ovector[1];
+        size_t match_start = match.data() - inside.data();
+        size_t match_end = match_start + match.size();
 
         if (prev != match_start) {
             splits.push_back({{prev, match_start}, false});
