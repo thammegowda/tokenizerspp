@@ -15,6 +15,7 @@
 #include "tokenizers/tokenizer_config.h"
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -147,6 +148,7 @@ private:
 
     std::optional<TokenizerConfig> config_;
     mutable std::unordered_map<std::string, ChatTemplate> template_cache_;
+    mutable std::unique_ptr<std::mutex> template_cache_mutex_;  ///< protects lazy insertions into template_cache_
 
     // Internal encode helpers
     Result<Encoding> encode_single(std::string_view input, bool add_special_tokens) const;
