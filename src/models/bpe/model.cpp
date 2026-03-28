@@ -44,8 +44,9 @@ BPE::BPE(std::unordered_map<std::string, TokenId> vocab,
 Result<std::vector<Token>> BPE::merge_word(std::string_view sequence) const {
     if (sequence.empty()) return std::vector<Token>{};
 
-    // Check cache using string_view (no allocation on hit)
+    // Fast path: check cache using string_view (no allocation on hit)
     if (sequence.size() < MAX_CACHE_WORD_LEN) {
+        std::lock_guard<std::mutex> lock(cache_mutex_);
         auto it = cache_.find(sequence);
         if (it != cache_.end()) {
             return it->second;
@@ -57,6 +58,7 @@ Result<std::vector<Token>> BPE::merge_word(std::string_view sequence) const {
 
     // Store in cache
     if (sequence.size() < MAX_CACHE_WORD_LEN) {
+        std::lock_guard<std::mutex> lock(cache_mutex_);
         cache_.emplace(std::string(sequence), *result);
     }
     return result;

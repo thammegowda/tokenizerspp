@@ -103,9 +103,10 @@ private:
         bool operator()(std::string_view a, std::string_view b) const { return a == b; }
     };
 
-    // Word-level cache: string → merged token list (thread-safe via mutable)
+    // Word-level cache: string → merged token list
     static constexpr size_t MAX_CACHE_WORD_LEN = 128;
     mutable std::unordered_map<std::string, std::vector<Token>, StringHash, StringEqual> cache_;
+    mutable std::mutex cache_mutex_;  ///< protects cache_ insertions
 
     Result<std::vector<Token>> merge_word(std::string_view sequence) const;
     Result<std::vector<Token>> merge_word_uncached(std::string_view sequence) const;
