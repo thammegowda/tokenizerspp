@@ -10,16 +10,16 @@ namespace tokenizers {
 namespace models {
 
 struct BPESymbol {
-    uint32_t c;    // token ID
+    TokenId c;    // token ID
     int prev;      // index of previous symbol (-1 if none)
     int next;      // index of next symbol (-1 if none)
-    uint32_t len;  // byte length this symbol covers
+    TokenId len;  // byte length this symbol covers
 };
 
 struct BPEMerge {
-    uint32_t rank;
-    uint32_t pos;   // index of left symbol
-    uint32_t new_id;
+    TokenId rank;
+    TokenId pos;   // index of left symbol
+    TokenId new_id;
 };
 
 struct BPEMergeGreater {
@@ -32,10 +32,10 @@ struct BPEMergeGreater {
 /// Vector-based linked list of symbols supporting BPE merge_all.
 class BPEWord {
 public:
-    void add(uint32_t c, uint32_t len);
+    void add(TokenId c, TokenId len);
     void merge_all(const MergeMap& merges);
     std::vector<Token> to_tokens(
-        const std::unordered_map<uint32_t, std::string>& vocab_r) const;
+        const std::unordered_map<TokenId, std::string>& vocab_r) const;
     bool empty() const { return symbols_.empty(); }
 
 private:

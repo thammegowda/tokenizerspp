@@ -166,7 +166,7 @@ These features exist in the Rust tokenizers library but are **not** in this C++ 
 |---------|---------|---------|
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.11.3 | JSON parsing |
 | [uni-algo](https://github.com/uni-algo/uni-algo) | 1.2.0 | Unicode normalization |
-| [PCRE2](https://github.com/PCRE2Project/pcre2) | 10.44 | Regex (lookahead/lookbehind) |
+| [RE2](https://github.com/google/re2) | 2024-07-02 | Regex (Unicode-aware) |
 
 All fetched automatically via CMake FetchContent.
 

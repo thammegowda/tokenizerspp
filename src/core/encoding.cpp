@@ -5,13 +5,13 @@
 
 namespace tokenizers {
 
-Encoding::Encoding(std::vector<uint32_t> ids,
-                   std::vector<uint32_t> type_ids,
+Encoding::Encoding(std::vector<TokenId> ids,
+                   std::vector<TokenId> type_ids,
                    std::vector<std::string> tokens,
-                   std::vector<std::optional<uint32_t>> words,
+                   std::vector<std::optional<TokenId>> words,
                    std::vector<Offsets> offsets,
-                   std::vector<uint32_t> special_tokens_mask,
-                   std::vector<uint32_t> attention_mask,
+                   std::vector<TokenId> special_tokens_mask,
+                   std::vector<TokenId> attention_mask,
                    std::vector<Encoding> overflowing,
                    std::unordered_map<size_t, std::pair<size_t, size_t>> sequence_ranges)
     : ids_(std::move(ids)),
@@ -36,7 +36,7 @@ Encoding Encoding::with_capacity(size_t len) {
     return e;
 }
 
-Encoding Encoding::from_tokens(const std::vector<Token>& tokens, uint32_t type_id) {
+Encoding Encoding::from_tokens(const std::vector<Token>& tokens, TokenId type_id) {
     size_t n = tokens.size();
     Encoding e;
     e.ids_.reserve(n);
@@ -147,18 +147,18 @@ void Encoding::truncate(size_t max_length, size_t stride, bool from_right) {
     }
 }
 
-void Encoding::pad(size_t target_length, uint32_t pad_id, uint32_t pad_type_id,
+void Encoding::pad(size_t target_length, TokenId pad_id, TokenId pad_type_id,
                    const std::string& pad_token, bool pad_right) {
     if (ids_.size() >= target_length) return;
     size_t pad_count = target_length - ids_.size();
 
-    auto pad_ids = std::vector<uint32_t>(pad_count, pad_id);
-    auto pad_type_ids = std::vector<uint32_t>(pad_count, pad_type_id);
+    auto pad_ids = std::vector<TokenId>(pad_count, pad_id);
+    auto pad_type_ids = std::vector<TokenId>(pad_count, pad_type_id);
     auto pad_tokens = std::vector<std::string>(pad_count, pad_token);
-    auto pad_words = std::vector<std::optional<uint32_t>>(pad_count, std::nullopt);
+    auto pad_words = std::vector<std::optional<TokenId>>(pad_count, std::nullopt);
     auto pad_offsets = std::vector<Offsets>(pad_count, {0, 0});
-    auto pad_special = std::vector<uint32_t>(pad_count, 1);
-    auto pad_attention = std::vector<uint32_t>(pad_count, 0);
+    auto pad_special = std::vector<TokenId>(pad_count, 1);
+    auto pad_attention = std::vector<TokenId>(pad_count, 0);
 
     if (pad_right) {
         ids_.insert(ids_.end(), pad_ids.begin(), pad_ids.end());

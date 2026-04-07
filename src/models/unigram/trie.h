@@ -2,6 +2,7 @@
 /// @file models/unigram/trie.h
 /// Byte-level prefix trie for Unigram model.
 
+#include "tokenizers/common.h"
 #include <cstdint>
 #include <memory>
 #include <string>

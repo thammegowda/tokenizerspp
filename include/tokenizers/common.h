@@ -14,6 +14,10 @@
 
 namespace tokenizers {
 
+/// Token ID type.  Signed so that -1 can serve as a "not found" sentinel,
+/// matching the convention used by most C++ tokenizer consumers.
+using TokenId = int32_t;
+
 /// Byte offset pair (start, end) in original or normalized string.
 using Offsets = std::pair<size_t, size_t>;
 

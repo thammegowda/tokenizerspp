@@ -11,7 +11,7 @@ static constexpr double K_UNK_PENALTY = 10.0;
 
 struct Unigram::Impl {
     std::vector<std::pair<std::string, double>> vocab;
-    std::unordered_map<std::string, uint32_t> token_to_ids;
+    std::unordered_map<std::string, TokenId> token_to_ids;
     Trie trie;
     double min_score = 0.0;
     std::optional<size_t> unk_id;
@@ -57,7 +57,7 @@ std::vector<std::string> Unigram::Impl::encode_optimized(std::string_view senten
             std::string token(sentence.substr(starts_at, match_len));
             auto it = token_to_ids.find(token);
             if (it == token_to_ids.end()) continue;
-            uint32_t id = it->second;
+            TokenId id = it->second;
             double score = vocab[id].second;
             double candidate = score + best_score_here;
 
@@ -129,7 +129,7 @@ Unigram::Unigram(std::vector<std::pair<std::string, double>> vocab,
 
     double min_score = std::numeric_limits<double>::infinity();
     for (size_t i = 0; i < vocab.size(); ++i) {
-        impl_->token_to_ids[vocab[i].first] = static_cast<uint32_t>(i);
+        impl_->token_to_ids[vocab[i].first] = static_cast<TokenId>(i);
         impl_->trie.push(vocab[i].first);
         if (vocab[i].second < min_score) {
             min_score = vocab[i].second;
@@ -172,13 +172,13 @@ Result<std::vector<Token>> Unigram::tokenize(std::string_view sequence) const {
             if (all_found) {
                 for (auto& bt : byte_tokens) tokens.push_back(std::move(bt));
             } else if (impl_->unk_id.has_value()) {
-                uint32_t uid = static_cast<uint32_t>(*impl_->unk_id);
+                TokenId uid = static_cast<TokenId>(*impl_->unk_id);
                 tokens.emplace_back(uid, std::move(s), offsets);
             } else {
                 return make_error("Unknown token and no unk_id set");
             }
         } else if (impl_->unk_id.has_value()) {
-            uint32_t uid = static_cast<uint32_t>(*impl_->unk_id);
+            TokenId uid = static_cast<TokenId>(*impl_->unk_id);
             tokens.emplace_back(uid, std::move(s), offsets);
         } else {
             return make_error("Unknown token and no unk_id set");
@@ -188,18 +188,18 @@ Result<std::vector<Token>> Unigram::tokenize(std::string_view sequence) const {
     return tokens;
 }
 
-std::optional<uint32_t> Unigram::token_to_id(std::string_view token) const {
+std::optional<TokenId> Unigram::token_to_id(std::string_view token) const {
     auto it = impl_->token_to_ids.find(std::string(token));
     if (it != impl_->token_to_ids.end()) return it->second;
     return std::nullopt;
 }
 
-std::optional<std::string> Unigram::id_to_token(uint32_t id) const {
+std::optional<std::string> Unigram::id_to_token(TokenId id) const {
     if (id < impl_->vocab.size()) return impl_->vocab[id].first;
     return std::nullopt;
 }
 
-std::unordered_map<std::string, uint32_t> Unigram::get_vocab() const {
+std::unordered_map<std::string, TokenId> Unigram::get_vocab() const {
     return impl_->token_to_ids;
 }
 

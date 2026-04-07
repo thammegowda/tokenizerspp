@@ -3,7 +3,7 @@
 namespace tokenizers {
 namespace models {
 
-void BPEWord::add(uint32_t c, uint32_t len) {
+void BPEWord::add(TokenId c, TokenId len) {
     int idx = static_cast<int>(symbols_.size());
     int prev = idx > 0 ? idx - 1 : -1;
     if (prev >= 0) {
@@ -20,7 +20,7 @@ void BPEWord::merge_all(const MergeMap& merges) {
     for (size_t i = 0; i + 1 < symbols_.size(); ++i) {
         auto it = merges.find({symbols_[i].c, symbols_[i + 1].c});
         if (it != merges.end()) {
-            queue.push({it->second.first, static_cast<uint32_t>(i), it->second.second});
+            queue.push({it->second.first, static_cast<TokenId>(i), it->second.second});
         }
     }
 
@@ -59,7 +59,7 @@ void BPEWord::merge_all(const MergeMap& merges) {
             int left_n = symbols_[pos].prev;
             auto it2 = merges.find({symbols_[left_n].c, symbols_[pos].c});
             if (it2 != merges.end()) {
-                queue.push({it2->second.first, static_cast<uint32_t>(left_n), it2->second.second});
+                queue.push({it2->second.first, static_cast<TokenId>(left_n), it2->second.second});
             }
         }
 
@@ -68,14 +68,14 @@ void BPEWord::merge_all(const MergeMap& merges) {
             int right_n = symbols_[pos].next;
             auto it2 = merges.find({symbols_[pos].c, symbols_[right_n].c});
             if (it2 != merges.end()) {
-                queue.push({it2->second.first, static_cast<uint32_t>(pos), it2->second.second});
+                queue.push({it2->second.first, static_cast<TokenId>(pos), it2->second.second});
             }
         }
     }
 }
 
 std::vector<Token> BPEWord::to_tokens(
-    const std::unordered_map<uint32_t, std::string>& vocab_r) const {
+    const std::unordered_map<TokenId, std::string>& vocab_r) const {
     std::vector<Token> tokens;
     size_t offset = 0;
     for (const auto& sym : symbols_) {

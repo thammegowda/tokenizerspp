@@ -15,11 +15,14 @@
 #include "tokenizers/tokenizer_config.h"
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#include <nlohmann/json_fwd.hpp>
 
 namespace tokenizers {
 
@@ -33,8 +36,8 @@ struct PaddingParams {
     PaddingStrategy strategy = PaddingStrategy::BatchLongest;
     PaddingDirection direction = PaddingDirection::Right;
     size_t pad_to_multiple_of = 0;
-    uint32_t pad_id = 0;
-    uint32_t pad_type_id = 0;
+    TokenId pad_id = 0;
+    TokenId pad_type_id = 0;
     std::string pad_token = "[PAD]";
     size_t fixed_length = 0;
 };
@@ -55,7 +58,7 @@ struct TruncationParams {
 /// The main Tokenizer class.
 class Tokenizer {
 public:
-    Tokenizer() = default;
+    Tokenizer();
     explicit Tokenizer(ModelPtr model);
     ~Tokenizer();
     Tokenizer(Tokenizer&&) noexcept;
@@ -78,8 +81,8 @@ public:
 
     // Vocabulary
     [[nodiscard]] size_t get_vocab_size() const;
-    [[nodiscard]] std::optional<uint32_t> token_to_id(std::string_view token) const;
-    [[nodiscard]] std::optional<std::string> id_to_token(uint32_t id) const;
+    [[nodiscard]] std::optional<TokenId> token_to_id(std::string_view token) const;
+    [[nodiscard]] std::optional<std::string> id_to_token(TokenId id) const;
 
     // Add tokens
     size_t add_tokens(const std::vector<AddedToken>& tokens);
@@ -93,15 +96,16 @@ public:
     encode_batch(const std::vector<std::string>& inputs, bool add_special_tokens) const;
 
     // Decode
-    [[nodiscard]] Result<std::string> decode(const std::vector<uint32_t>& ids,
+    [[nodiscard]] Result<std::string> decode(const std::vector<TokenId>& ids,
                                               bool skip_special_tokens) const;
     [[nodiscard]] Result<std::vector<std::string>>
-    decode_batch(const std::vector<std::vector<uint32_t>>& batch_ids,
+    decode_batch(const std::vector<std::vector<TokenId>>& batch_ids,
                  bool skip_special_tokens) const;
 
     // Serialization
     [[nodiscard]] static Result<Tokenizer> from_file(const std::string& path);
     [[nodiscard]] static Result<Tokenizer> from_string(std::string_view json);
+    [[nodiscard]] static Result<Tokenizer> from_json(const nlohmann::json& j);
     [[nodiscard]] static Result<Tokenizer> from_directory(const std::string& dir);
     [[nodiscard]] Result<std::string> to_string(bool pretty = false) const;
     [[nodiscard]] Result<void> save(const std::string& path, bool pretty = true) const;
@@ -144,9 +148,11 @@ private:
 
     std::optional<TokenizerConfig> config_;
     mutable std::unordered_map<std::string, ChatTemplate> template_cache_;
+    mutable std::unique_ptr<std::mutex> template_cache_mutex_;  ///< protects lazy insertions into template_cache_
 
-    // Internal encode helper
+    // Internal encode helpers
     Result<Encoding> encode_single(std::string_view input, bool add_special_tokens) const;
+    Result<Encoding> encode_segment(const std::string& text) const;
 };
 
 } // namespace tokenizers

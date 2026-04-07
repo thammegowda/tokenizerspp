@@ -98,8 +98,8 @@ struct BytesToCharConverter {
 };
 
 Result<Encoding> PreTokenizedString::into_encoding(
-    std::optional<uint32_t> word_idx,
-    uint32_t type_id,
+    std::optional<TokenId> word_idx,
+    TokenId type_id,
     OffsetType offset_type) const {
 
     if (splits_.empty()) return Encoding{};
@@ -116,10 +116,10 @@ Result<Encoding> PreTokenizedString::into_encoding(
         converter.emplace(original_);
     }
 
-    std::vector<uint32_t> ids;
-    std::vector<uint32_t> tids;
+    std::vector<TokenId> ids;
+    std::vector<TokenId> tids;
     std::vector<std::string> tokens;
-    std::vector<std::optional<uint32_t>> words;
+    std::vector<std::optional<TokenId>> words;
     std::vector<Offsets> offsets;
 
     // Estimate total tokens for reservation
@@ -160,7 +160,7 @@ Result<Encoding> PreTokenizedString::into_encoding(
 
             offsets.push_back(final_offsets);
             words.push_back(word_idx.has_value() ? word_idx
-                                                 : std::optional<uint32_t>(static_cast<uint32_t>(split_idx)));
+                                                 : std::optional<TokenId>(static_cast<TokenId>(split_idx)));
             tids.push_back(type_id);
         }
     }
@@ -172,8 +172,8 @@ Result<Encoding> PreTokenizedString::into_encoding(
         std::move(tokens),
         std::move(words),
         std::move(offsets),
-        std::vector<uint32_t>(n, 0),  // special_tokens_mask
-        std::vector<uint32_t>(n, 1),  // attention_mask
+        std::vector<TokenId>(n, 0),  // special_tokens_mask
+        std::vector<TokenId>(n, 1),  // attention_mask
         {},                            // overflowing
         {}                             // sequence_ranges
     );

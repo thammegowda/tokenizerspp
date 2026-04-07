@@ -5,7 +5,7 @@ namespace processors {
 
 namespace {
 
-Encoding make_special_token_encoding(const std::string& token, uint32_t id, uint32_t type_id) {
+Encoding make_special_token_encoding(const std::string& token, TokenId id, TokenId type_id) {
     return Encoding(
         {id},
         {type_id},

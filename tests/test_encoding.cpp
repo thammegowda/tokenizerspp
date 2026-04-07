@@ -26,14 +26,14 @@ TEST(EncodingTest, FromTokens) {
     auto enc = Encoding::from_tokens(tokens, 0);
     EXPECT_EQ(enc.len(), 2u);
     EXPECT_FALSE(enc.is_empty());
-    EXPECT_EQ(enc.get_ids(), (std::vector<uint32_t>{0, 1}));
+    EXPECT_EQ(enc.get_ids(), (std::vector<TokenId>{0, 1}));
     EXPECT_EQ(enc.get_tokens()[0], "Hello");
     EXPECT_EQ(enc.get_tokens()[1], "World");
     EXPECT_EQ(enc.get_offsets()[0], (Offsets{0, 5}));
     EXPECT_EQ(enc.get_offsets()[1], (Offsets{6, 11}));
-    EXPECT_EQ(enc.get_type_ids(), (std::vector<uint32_t>{0, 0}));
-    EXPECT_EQ(enc.get_attention_mask(), (std::vector<uint32_t>{1, 1}));
-    EXPECT_EQ(enc.get_special_tokens_mask(), (std::vector<uint32_t>{0, 0}));
+    EXPECT_EQ(enc.get_type_ids(), (std::vector<TokenId>{0, 0}));
+    EXPECT_EQ(enc.get_attention_mask(), (std::vector<TokenId>{1, 1}));
+    EXPECT_EQ(enc.get_special_tokens_mask(), (std::vector<TokenId>{0, 0}));
 }
 
 TEST(EncodingTest, FullConstruction) {
@@ -49,7 +49,7 @@ TEST(EncodingTest, FullConstruction) {
         {}                    // sequence_ranges
     );
     EXPECT_EQ(enc.len(), 3u);
-    EXPECT_EQ(enc.get_ids(), (std::vector<uint32_t>{1, 2, 3}));
+    EXPECT_EQ(enc.get_ids(), (std::vector<TokenId>{1, 2, 3}));
 }
 
 TEST(EncodingTest, MergeTwo) {
@@ -57,7 +57,7 @@ TEST(EncodingTest, MergeTwo) {
     auto enc2 = Encoding::from_tokens({{1, "World", {0, 5}}}, 0);
     enc1.merge_with(std::move(enc2), false);
     EXPECT_EQ(enc1.len(), 2u);
-    EXPECT_EQ(enc1.get_ids(), (std::vector<uint32_t>{0, 1}));
+    EXPECT_EQ(enc1.get_ids(), (std::vector<TokenId>{0, 1}));
     EXPECT_EQ(enc1.get_offsets()[0], (Offsets{0, 5}));
     EXPECT_EQ(enc1.get_offsets()[1], (Offsets{0, 5}));
 }
@@ -78,7 +78,7 @@ TEST(EncodingTest, MergeMultiple) {
     encs.push_back(Encoding::from_tokens({{2, "c", {0, 1}}}, 0));
     auto merged = Encoding::merge(std::move(encs), false);
     EXPECT_EQ(merged.len(), 3u);
-    EXPECT_EQ(merged.get_ids(), (std::vector<uint32_t>{0, 1, 2}));
+    EXPECT_EQ(merged.get_ids(), (std::vector<TokenId>{0, 1, 2}));
 }
 
 TEST(EncodingTest, TruncateRight) {
@@ -88,7 +88,7 @@ TEST(EncodingTest, TruncateRight) {
     }, 0);
     enc.truncate(3, 0, true);
     EXPECT_EQ(enc.len(), 3u);
-    EXPECT_EQ(enc.get_ids(), (std::vector<uint32_t>{0, 1, 2}));
+    EXPECT_EQ(enc.get_ids(), (std::vector<TokenId>{0, 1, 2}));
 }
 
 TEST(EncodingTest, TruncateLeft) {
@@ -98,7 +98,7 @@ TEST(EncodingTest, TruncateLeft) {
     }, 0);
     enc.truncate(3, 0, false);
     EXPECT_EQ(enc.len(), 3u);
-    EXPECT_EQ(enc.get_ids(), (std::vector<uint32_t>{2, 3, 4}));
+    EXPECT_EQ(enc.get_ids(), (std::vector<TokenId>{2, 3, 4}));
 }
 
 TEST(EncodingTest, TruncateNoOp) {
@@ -111,20 +111,20 @@ TEST(EncodingTest, PadRight) {
     auto enc = Encoding::from_tokens({{0, "Hello", {0, 5}}}, 0);
     enc.pad(4, 0, 0, "[PAD]", true);
     EXPECT_EQ(enc.len(), 4u);
-    EXPECT_EQ(enc.get_ids(), (std::vector<uint32_t>{0, 0, 0, 0}));
+    EXPECT_EQ(enc.get_ids(), (std::vector<TokenId>{0, 0, 0, 0}));
     EXPECT_EQ(enc.get_tokens()[0], "Hello");
     EXPECT_EQ(enc.get_tokens()[1], "[PAD]");
-    EXPECT_EQ(enc.get_attention_mask(), (std::vector<uint32_t>{1, 0, 0, 0}));
+    EXPECT_EQ(enc.get_attention_mask(), (std::vector<TokenId>{1, 0, 0, 0}));
 }
 
 TEST(EncodingTest, PadLeft) {
     auto enc = Encoding::from_tokens({{5, "Hello", {0, 5}}}, 0);
     enc.pad(3, 0, 0, "[PAD]", false);
     EXPECT_EQ(enc.len(), 3u);
-    EXPECT_EQ(enc.get_ids(), (std::vector<uint32_t>{0, 0, 5}));
+    EXPECT_EQ(enc.get_ids(), (std::vector<TokenId>{0, 0, 5}));
     EXPECT_EQ(enc.get_tokens()[0], "[PAD]");
     EXPECT_EQ(enc.get_tokens()[2], "Hello");
-    EXPECT_EQ(enc.get_attention_mask(), (std::vector<uint32_t>{0, 0, 1}));
+    EXPECT_EQ(enc.get_attention_mask(), (std::vector<TokenId>{0, 0, 1}));
 }
 
 TEST(EncodingTest, PadNoOp) {

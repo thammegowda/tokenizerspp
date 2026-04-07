@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(tokenizerpp VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# C++23 is set per-target (not globally) so that parent projects embedding
+# tokenizerpp alongside C++17 libraries (e.g. ONNX Runtime) are not affected.
+# When building standalone, default to C++23.
+if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 23)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -28,31 +33,39 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(uni_algo)
 
-# PCRE2 for regex with lookahead/lookbehind support (needed by byte-level pre-tokenizer)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(PCRE2 IMPORTED_TARGET libpcre2-8)
-endif()
-if(NOT PCRE2_FOUND)
-    find_library(PCRE2_LIBRARY NAMES pcre2-8)
-    find_path(PCRE2_INCLUDE_DIR NAMES pcre2.h)
-    if(PCRE2_LIBRARY AND PCRE2_INCLUDE_DIR)
-        set(PCRE2_FOUND TRUE)
+# RE2 for regex (Unicode-aware via \p{L}, \p{N}, etc.; lighter than PCRE2)
+if(NOT TARGET re2::re2)
+    find_package(re2 QUIET CONFIG)
+    if(NOT re2_FOUND)
+        message(STATUS "RE2 not found on system, building from source")
+        if(NOT TARGET absl::strings)
+            FetchContent_Declare(
+                abseil-cpp
+                GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
+                GIT_TAG 20240722.0
+            )
+            set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+            set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+            FetchContent_MakeAvailable(abseil-cpp)
+        endif()
+        FetchContent_Declare(
+            re2
+            GIT_REPOSITORY https://github.com/google/re2.git
+            GIT_TAG 2024-07-02
+        )
+        set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        FetchContent_Populate(re2)
+        # Suppress RE2's install() rules: EXCLUDE_FROM_ALL prevents install,
+        # but RE2 still generates export() targets. Disable all install-related options.
+        set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+        set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+        # Block RE2's install(EXPORT) by scoping with EXCLUDE_FROM_ALL and
+        # prevent the export set from being generated
+        set(CMAKE_SKIP_INSTALL_RULES ON)
+        add_subdirectory(${re2_SOURCE_DIR} ${re2_BINARY_DIR} EXCLUDE_FROM_ALL)
+        set(CMAKE_SKIP_INSTALL_RULES OFF)
     endif()
-endif()
-
-if(NOT PCRE2_FOUND)
-    message(STATUS "PCRE2 not found on system, building from source")
-    FetchContent_Declare(
-        pcre2
-        URL https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz
-    )
-    set(PCRE2_BUILD_PCRE2_8 ON CACHE BOOL "" FORCE)
-    set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
-    set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
-    set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(PCRE2_BUILD_PCRE2GREP OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(pcre2)
 endif()
 
 # === Source files ===
@@ -111,6 +124,7 @@ set(TOKENIZERPP_SOURCES
     src/decoders/strip.cpp
     src/decoders/wordpiece.cpp
     src/decoders/sequence.cpp
+    src/decoders/replace.cpp
 
     src/utils/regex.cpp
     src/utils/padding.cpp
@@ -120,6 +134,7 @@ set(TOKENIZERPP_SOURCES
 )
 
 add_library(tokenizerpp STATIC ${TOKENIZERPP_SOURCES})
+target_compile_features(tokenizerpp PUBLIC cxx_std_23)
 target_include_directories(tokenizerpp
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -134,15 +149,8 @@ target_link_libraries(tokenizerpp
         uni-algo::uni-algo
 )
 
-# Link PCRE2
-if(PCRE2_FOUND AND TARGET PkgConfig::PCRE2)
-    target_link_libraries(tokenizerpp PRIVATE PkgConfig::PCRE2)
-elseif(PCRE2_FOUND)
-    target_link_libraries(tokenizerpp PRIVATE ${PCRE2_LIBRARY})
-    target_include_directories(tokenizerpp PRIVATE ${PCRE2_INCLUDE_DIR})
-else()
-    target_link_libraries(tokenizerpp PRIVATE pcre2-8)
-endif()
+# Link RE2
+target_link_libraries(tokenizerpp PRIVATE re2::re2)
 
 # === Benchmarks ===
 if(TOKENIZERPP_BUILD_BENCHMARKS)

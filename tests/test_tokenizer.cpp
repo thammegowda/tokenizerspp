@@ -16,7 +16,7 @@ namespace tokenizers {
 namespace {
 
 // Helper: create a BERT-like vocabulary
-std::unordered_map<std::string, uint32_t> make_bert_vocab() {
+std::unordered_map<std::string, TokenId> make_bert_vocab() {
     return {
         {"[PAD]", 0}, {"[UNK]", 1}, {"[CLS]", 2}, {"[SEP]", 3}, {"[MASK]", 4},
         {"hello", 5}, {"world", 6}, {"##lo", 7}, {"hel", 8},
@@ -89,8 +89,8 @@ TEST(BertProcessingTest, NoSpecialTokens) {
 TEST(SequenceProcessingTest, ChainedProcessors) {
     std::vector<PostProcessorPtr> procs;
     procs.push_back(std::make_unique<processors::BertProcessing>(
-        std::pair<std::string, uint32_t>{"[SEP]", 3},
-        std::pair<std::string, uint32_t>{"[CLS]", 2}));
+        std::pair<std::string, TokenId>{"[SEP]", 3},
+        std::pair<std::string, TokenId>{"[CLS]", 2}));
     processors::SequenceProcessing seq(std::move(procs));
 
     EXPECT_EQ(seq.added_tokens(false), 2u);
@@ -112,8 +112,8 @@ TEST(TokenizerE2E, WordPieceEncodeDecode) {
         true, true, std::nullopt, true));
     tokenizer.with_pre_tokenizer(std::make_unique<pre_tokenizers::BertPreTokenizer>());
     tokenizer.with_post_processor(std::make_unique<processors::BertProcessing>(
-        std::pair<std::string, uint32_t>{"[SEP]", 3},
-        std::pair<std::string, uint32_t>{"[CLS]", 2}));
+        std::pair<std::string, TokenId>{"[SEP]", 3},
+        std::pair<std::string, TokenId>{"[CLS]", 2}));
     tokenizer.with_decoder(std::make_unique<decoders::WordPieceDecoder>());
 
     // Encode
@@ -138,15 +138,15 @@ TEST(TokenizerE2E, WordPieceEncodeNoSpecialTokens) {
     Tokenizer tokenizer(std::move(model));
     tokenizer.with_pre_tokenizer(std::make_unique<pre_tokenizers::BertPreTokenizer>());
     tokenizer.with_post_processor(std::make_unique<processors::BertProcessing>(
-        std::pair<std::string, uint32_t>{"[SEP]", 3},
-        std::pair<std::string, uint32_t>{"[CLS]", 2}));
+        std::pair<std::string, TokenId>{"[SEP]", 3},
+        std::pair<std::string, TokenId>{"[CLS]", 2}));
 
     auto enc = tokenizer.encode("hello world", false);
     ASSERT_TRUE(enc.has_value()) << enc.error().message();
 
     auto& ids = enc->get_ids();
     // No CLS/SEP since add_special_tokens=false
-    for (uint32_t id : ids) {
+    for (TokenId id : ids) {
         EXPECT_NE(id, 2u);  // no CLS
         EXPECT_NE(id, 3u);  // no SEP
     }
@@ -156,7 +156,7 @@ TEST(TokenizerE2E, WordPieceEncodeNoSpecialTokens) {
 
 TEST(TokenizerE2E, BPEEncodeDecode) {
     using models::MergeMap;
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"h", 0}, {"e", 1}, {"l", 2}, {"o", 3}, {" ", 4},
         {"w", 5}, {"r", 6}, {"d", 7},
         {"he", 8}, {"ll", 9}, {"wo", 10}, {"rl", 11},
@@ -185,7 +185,7 @@ TEST(TokenizerE2E, BPEEncodeDecode) {
 // === Encode/Decode round-trip ===
 
 TEST(TokenizerE2E, RoundTrip) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     auto model = std::make_unique<models::WordPiece>(vocab);
@@ -209,7 +209,7 @@ TEST(TokenizerE2E, RoundTrip) {
 // === Vocabulary delegation ===
 
 TEST(TokenizerTest, VocabDelegation) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     auto model = std::make_unique<models::WordPiece>(vocab);
@@ -225,7 +225,7 @@ TEST(TokenizerTest, VocabDelegation) {
 // === Encode batch ===
 
 TEST(TokenizerE2E, EncodeBatch) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     auto model = std::make_unique<models::WordPiece>(vocab);
@@ -235,14 +235,14 @@ TEST(TokenizerE2E, EncodeBatch) {
     auto result = tokenizer.encode_batch({"hello", "world"}, true);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->size(), 2u);
-    EXPECT_EQ((*result)[0].get_ids(), std::vector<uint32_t>{1});
-    EXPECT_EQ((*result)[1].get_ids(), std::vector<uint32_t>{2});
+    EXPECT_EQ((*result)[0].get_ids(), std::vector<TokenId>{1});
+    EXPECT_EQ((*result)[1].get_ids(), std::vector<TokenId>{2});
 }
 
 // === Decode batch ===
 
 TEST(TokenizerE2E, DecodeBatch) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"hello", 1}, {"world", 2},
     };
     auto model = std::make_unique<models::WordPiece>(vocab);
@@ -263,8 +263,8 @@ TEST(TokenizerE2E, PairEncoding) {
     Tokenizer tokenizer(std::move(model));
     tokenizer.with_pre_tokenizer(std::make_unique<pre_tokenizers::BertPreTokenizer>());
     tokenizer.with_post_processor(std::make_unique<processors::BertProcessing>(
-        std::pair<std::string, uint32_t>{"[SEP]", 3},
-        std::pair<std::string, uint32_t>{"[CLS]", 2}));
+        std::pair<std::string, TokenId>{"[SEP]", 3},
+        std::pair<std::string, TokenId>{"[CLS]", 2}));
 
     auto enc = tokenizer.encode_pair("hello", "world", true);
     ASSERT_TRUE(enc.has_value()) << enc.error().message();
@@ -280,7 +280,7 @@ TEST(TokenizerE2E, PairEncoding) {
 // === Truncation ===
 
 TEST(TokenizerE2E, Truncation) {
-    std::unordered_map<std::string, uint32_t> vocab = {
+    std::unordered_map<std::string, TokenId> vocab = {
         {"[UNK]", 0}, {"a", 1}, {"b", 2}, {"c", 3},
     };
     auto model = std::make_unique<models::WordPiece>(vocab);
@@ -1031,6 +1031,63 @@ TEST(TokenizerChatTest, NamedTemplates) {
     auto r2 = tok->apply_chat_template({{"user", "Hi"}}, false, "tool_use");
     ASSERT_TRUE(r2.has_value()) << r2.error().message();
     EXPECT_NE(r2->find("tool: Hi"), std::string::npos);
+}
+
+// ============================================================================
+// Added token splitting during encode
+//
+// When input text contains literal added-token strings (e.g. from chat template
+// rendering), the tokenizer must match them as single tokens — not feed them
+// into the BPE/Unigram model as regular sub-words.
+// ============================================================================
+
+TEST(AddedTokenEncodingTest, SpecialTokensEncodedAsSingleIds) {
+    // Build a minimal WordLevel tokenizer with added tokens
+    // (WordLevel maps whole words to IDs without merging/splitting)
+    std::unordered_map<std::string, TokenId> vocab = {
+        {"hello", 0}, {"world", 1}, {"<bos>", 2}, {"<eos>", 3},
+        {"<start>", 4}, {"<end>", 5},
+    };
+    auto model = std::make_unique<models::WordLevel>(vocab);
+
+    Tokenizer tok(std::move(model));
+
+    // Register added tokens (same as what happens when loading tokenizer.json)
+    tok.add_special_tokens({
+        AddedToken{"<bos>", true},
+        AddedToken{"<eos>", true},
+        AddedToken{"<start>", true},
+        AddedToken{"<end>", true},
+    });
+
+    // Encode text with embedded special tokens
+    auto result = tok.encode("<bos><start>hello<end><eos>", false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    auto& ids = result->get_ids();
+    // Should be: <bos>=2, <start>=4, hello=0, <end>=5, <eos>=3
+    ASSERT_EQ(ids.size(), 5u) << "Expected 5 tokens (3 special + 'hello' + 1 special)";
+    EXPECT_EQ(ids[0], 2);  // <bos>
+    EXPECT_EQ(ids[1], 4);  // <start>
+    EXPECT_EQ(ids[2], 0);  // hello
+    EXPECT_EQ(ids[3], 5);  // <end>
+    EXPECT_EQ(ids[4], 3);  // <eos>
+}
+
+TEST(AddedTokenEncodingTest, NoAddedTokensPassThrough) {
+    // Without added tokens, angle-bracket strings go through the model normally
+    std::unordered_map<std::string, TokenId> vocab = {
+        {"hello", 0}, {"world", 1}, {"<", 2}, {">", 3}, {"b", 4}, {"o", 5}, {"s", 6},
+    };
+    models::MergeMap merges;
+    auto model = std::make_unique<models::BPE>(vocab, merges);
+    Tokenizer tok(std::move(model));
+
+    // No added tokens registered — "<bos>" will be split by BPE
+    auto result = tok.encode("<bos>hello", false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    // "<bos>" would be split into subwords, not a single token
+    EXPECT_GT(result->get_ids().size(), 2u);
 }
 
 } // namespace

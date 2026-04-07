@@ -16,7 +16,7 @@ Result<Encoding> PostProcessor::process(
     if (pair_encoding) {
         pair_encoding->set_sequence_id(1);
         // Set type_id = 1 for the pair encoding
-        std::vector<uint32_t> type_ids(pair_encoding->len(), 1);
+        std::vector<TokenId> type_ids(pair_encoding->len(), 1);
         pair_encoding->set_type_ids(std::move(type_ids));
         encodings.push_back(std::move(*pair_encoding));
     }

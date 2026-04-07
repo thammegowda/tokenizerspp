@@ -216,8 +216,8 @@ static Result<PreTokenizerPtr> parse_pre_tokenizer(const json& j) {
 
 static Result<PostProcessorPtr> parse_post_processor(const json& j);
 
-static std::pair<std::string, uint32_t> parse_token_pair(const json& j) {
-    return {j[0].get<std::string>(), j[1].get<uint32_t>()};
+static std::pair<std::string, TokenId> parse_token_pair(const json& j) {
+    return {j[0].get<std::string>(), j[1].get<TokenId>()};
 }
 
 static Result<PostProcessorPtr> parse_post_processor_obj(const json& j) {
@@ -256,11 +256,11 @@ static Result<PostProcessorPtr> parse_post_processor_obj(const json& j) {
                     auto id = item["Sequence"]["id"].get<std::string>();
                     piece.sequence = (id == "B") ? processors::TemplateSequence::B
                                                  : processors::TemplateSequence::A;
-                    piece.type_id = get_or<uint32_t>(item["Sequence"], "type_id", 0);
+                    piece.type_id = get_or<TokenId>(item["Sequence"], "type_id", 0);
                 } else if (item.contains("SpecialToken")) {
                     piece.kind = processors::TemplatePiece::SpecialToken;
                     piece.special_token = item["SpecialToken"]["id"].get<std::string>();
-                    piece.type_id = get_or<uint32_t>(item["SpecialToken"], "type_id", 0);
+                    piece.type_id = get_or<TokenId>(item["SpecialToken"], "type_id", 0);
                 }
                 pieces.push_back(std::move(piece));
             }
@@ -275,7 +275,7 @@ static Result<PostProcessorPtr> parse_post_processor_obj(const json& j) {
             for (auto& [key, val] : j["special_tokens"].items()) {
                 processors::SpecialTokenDef st;
                 st.id = val.at("id").get<std::string>();
-                for (auto& id : val.at("ids")) st.ids.push_back(id.get<uint32_t>());
+                for (auto& id : val.at("ids")) st.ids.push_back(id.get<TokenId>());
                 for (auto& tok : val.at("tokens")) st.tokens.push_back(tok.get<std::string>());
                 if (!st.ids.empty()) st.token_id = st.ids[0];
                 special_tokens_vec.push_back(std::move(st));
@@ -364,6 +364,19 @@ static Result<DecoderPtr> parse_decoder_obj(const json& j) {
         }
         return std::make_unique<decoders::MetaspaceDecoder>(std::move(repl), prepend_always);
     }
+    if (type == "Replace") {
+        // Pattern can be {"String":"..."} or a plain string
+        std::string pat;
+        if (j.contains("pattern")) {
+            auto& p = j["pattern"];
+            if (p.is_object() && p.contains("String"))
+                pat = p["String"].get<std::string>();
+            else if (p.is_string())
+                pat = p.get<std::string>();
+        }
+        std::string content = get_or<std::string>(j, "content", "");
+        return std::make_unique<decoders::ReplaceDecoder>(std::move(pat), std::move(content));
+    }
     return make_error("Unknown decoder type: " + type);
 }
 
@@ -374,11 +387,11 @@ static Result<DecoderPtr> parse_decoder(const json& j) {
 
 // ── model ────────────────────────────────────────────────────────────────────
 
-static std::unordered_map<std::string, uint32_t> parse_vocab(const json& j) {
-    std::unordered_map<std::string, uint32_t> vocab;
+static std::unordered_map<std::string, TokenId> parse_vocab(const json& j) {
+    std::unordered_map<std::string, TokenId> vocab;
     vocab.reserve(j.size());
     for (auto& [key, val] : j.items()) {
-        vocab.emplace(key, val.get<uint32_t>());
+        vocab.emplace(key, val.get<TokenId>());
     }
     return vocab;
 }
@@ -421,15 +434,26 @@ static Result<ModelPtr> parse_model(const json& j) {
         if (j.contains("merges") && !j["merges"].is_null()) {
             auto& arr = j["merges"];
             merges.reserve(arr.size());
-            uint32_t rank = 0;
-            for (auto& merge_str : arr) {
-                std::string s = merge_str.get<std::string>();
-                auto space_pos = s.find(' ');
-                if (space_pos == std::string::npos) {
-                    return make_error("Invalid merge string (no space): " + s);
+            TokenId rank = 0;
+            for (auto& merge_entry : arr) {
+                std::string a, b;
+                if (merge_entry.is_string()) {
+                    // "a b" format
+                    std::string s = merge_entry.get<std::string>();
+                    auto space_pos = s.find(' ');
+                    if (space_pos == std::string::npos) {
+                        return make_error("Invalid merge string (no space): " + s);
+                    }
+                    a = s.substr(0, space_pos);
+                    b = s.substr(space_pos + 1);
+                } else if (merge_entry.is_array() && merge_entry.size() == 2) {
+                    // ["a", "b"] format
+                    a = merge_entry[0].get<std::string>();
+                    b = merge_entry[1].get<std::string>();
+                } else {
+                    ++rank;
+                    continue;
                 }
-                std::string a = s.substr(0, space_pos);
-                std::string b = s.substr(space_pos + 1);
 
                 auto a_it = vocab.find(a);
                 auto b_it = vocab.find(b);
@@ -437,8 +461,8 @@ static Result<ModelPtr> parse_model(const json& j) {
                     ++rank;
                     continue; // skip merges with unknown tokens
                 }
-                uint32_t a_id = a_it->second;
-                uint32_t b_id = b_it->second;
+                TokenId a_id = a_it->second;
+                TokenId b_id = b_it->second;
 
                 // Compute merged token: a + b[prefix_len..]
                 std::string merged = a + b.substr(prefix_len);
@@ -447,9 +471,9 @@ static Result<ModelPtr> parse_model(const json& j) {
                     ++rank;
                     continue; // skip if merged token not in vocab
                 }
-                uint32_t new_id = m_it->second;
+                TokenId new_id = m_it->second;
                 merges.emplace(models::Pair{a_id, b_id},
-                               std::pair<uint32_t, uint32_t>{rank, new_id});
+                               std::pair<TokenId, TokenId>{rank, new_id});
                 ++rank;
             }
         }
@@ -499,8 +523,8 @@ static std::optional<TruncationParams> parse_truncation(const json& j) {
 static std::optional<PaddingParams> parse_padding(const json& j) {
     if (j.is_null()) return std::nullopt;
     PaddingParams p;
-    p.pad_id = get_or<uint32_t>(j, "pad_id", 0);
-    p.pad_type_id = get_or<uint32_t>(j, "pad_type_id", 0);
+    p.pad_id = get_or<TokenId>(j, "pad_id", 0);
+    p.pad_type_id = get_or<TokenId>(j, "pad_type_id", 0);
     p.pad_token = get_or<std::string>(j, "pad_token", "[PAD]");
     auto dir = get_or<std::string>(j, "direction", "Right");
     p.direction = (dir == "Left") ? PaddingDirection::Left : PaddingDirection::Right;
@@ -534,7 +558,10 @@ Result<Tokenizer> Tokenizer::from_string(std::string_view json_str) {
     } catch (const json::parse_error& e) {
         return make_error(std::string("JSON parse error: ") + e.what());
     }
+    return from_json(j);
+}
 
+Result<Tokenizer> Tokenizer::from_json(const json& j) {
     // model (required)
     if (!j.contains("model") || j["model"].is_null()) {
         return make_error("tokenizer.json missing 'model' field");
@@ -866,6 +893,11 @@ static json serialize_decoder(const Decoder* d) {
         j["add_prefix_space"] = p->prepend_scheme_always;
         return j;
     }
+    if (auto* p = dynamic_cast<const decoders::ReplaceDecoder*>(d)) {
+        return json{{"type", "Replace"},
+                     {"pattern", json{{"String", p->pattern}}},
+                     {"content", p->content}};
+    }
     if (auto* p = dynamic_cast<const decoders::SequenceDecoder*>(d)) {
         json arr = json::array();
         for (auto& child : p->decoders)
@@ -882,7 +914,7 @@ static json serialize_model(const Model* m) {
     if (auto* p = dynamic_cast<const models::WordPiece*>(m)) {
         // Build ordered vocab (sorted by ID)
         auto vocab_map = p->get_vocab();
-        std::vector<std::pair<std::string, uint32_t>> sorted_vocab(vocab_map.begin(), vocab_map.end());
+        std::vector<std::pair<std::string, TokenId>> sorted_vocab(vocab_map.begin(), vocab_map.end());
         std::sort(sorted_vocab.begin(), sorted_vocab.end(),
                   [](const auto& a, const auto& b) { return a.second < b.second; });
         json vocab = json::object();
@@ -898,12 +930,12 @@ static json serialize_model(const Model* m) {
     if (auto* p = dynamic_cast<const models::BPE*>(m)) {
         auto vocab_map = p->get_vocab();
         // Build reverse vocab (id → token)
-        std::unordered_map<uint32_t, std::string> id_to_tok;
+        std::unordered_map<TokenId, std::string> id_to_tok;
         for (auto& [tok, id] : vocab_map)
             id_to_tok[id] = tok;
 
         // Build ordered vocab
-        std::vector<std::pair<std::string, uint32_t>> sorted_vocab(vocab_map.begin(), vocab_map.end());
+        std::vector<std::pair<std::string, TokenId>> sorted_vocab(vocab_map.begin(), vocab_map.end());
         std::sort(sorted_vocab.begin(), sorted_vocab.end(),
                   [](const auto& a, const auto& b) { return a.second < b.second; });
         json vocab = json::object();
@@ -912,7 +944,7 @@ static json serialize_model(const Model* m) {
 
         // Build merges sorted by rank
         auto& merge_map = p->get_merges();
-        std::vector<std::pair<models::Pair, uint32_t>> sorted_merges;
+        std::vector<std::pair<models::Pair, TokenId>> sorted_merges;
         sorted_merges.reserve(merge_map.size());
         for (auto& [pair, rank_newid] : merge_map)
             sorted_merges.push_back({pair, rank_newid.first});
@@ -944,7 +976,7 @@ static json serialize_model(const Model* m) {
     }
     if (auto* p = dynamic_cast<const models::WordLevel*>(m)) {
         auto vocab_map = p->get_vocab();
-        std::vector<std::pair<std::string, uint32_t>> sorted_vocab(vocab_map.begin(), vocab_map.end());
+        std::vector<std::pair<std::string, TokenId>> sorted_vocab(vocab_map.begin(), vocab_map.end());
         std::sort(sorted_vocab.begin(), sorted_vocab.end(),
                   [](const auto& a, const auto& b) { return a.second < b.second; });
         json vocab = json::object();

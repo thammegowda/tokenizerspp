@@ -126,7 +126,7 @@ TEST(ByteLevelTest, BytesCharMapSize) {
         if (b2c[i] != 0 || i == 0) ++count;
     }
     // All 256 bytes should be mapped (byte 0 maps to >= 256)
-    EXPECT_GE(static_cast<uint32_t>(b2c[0]), 256u);
+    EXPECT_GE(static_cast<TokenId>(b2c[0]), 256u);
     auto& c2b_valid = pre_tokenizers::ByteLevel::char_bytes_valid();
     size_t valid_count = 0;
     for (size_t i = 0; i < c2b_valid.size(); ++i) {
@@ -147,17 +147,17 @@ TEST(ByteLevelTest, BytesCharPrintableIdentity) {
 TEST(ByteLevelTest, BytesCharControlMapped) {
     // Control bytes like 0x00, 0x01 must map to 256+n
     auto& b2c = pre_tokenizers::ByteLevel::bytes_char_array();
-    EXPECT_GE(static_cast<uint32_t>(b2c[0x00]), 256u);
-    EXPECT_GE(static_cast<uint32_t>(b2c[0x01]), 256u);
-    EXPECT_GE(static_cast<uint32_t>(b2c[0x7F]), 256u); // DEL
-    EXPECT_GE(static_cast<uint32_t>(b2c[0xAD]), 256u); // soft hyphen
+    EXPECT_GE(static_cast<TokenId>(b2c[0x00]), 256u);
+    EXPECT_GE(static_cast<TokenId>(b2c[0x01]), 256u);
+    EXPECT_GE(static_cast<TokenId>(b2c[0x7F]), 256u); // DEL
+    EXPECT_GE(static_cast<TokenId>(b2c[0xAD]), 256u); // soft hyphen
 }
 
 TEST(ByteLevelTest, RoundTripMapping) {
     // Every byte → char → byte round-trips
     auto& b2c = pre_tokenizers::ByteLevel::bytes_char_array();
     auto& c2b = pre_tokenizers::ByteLevel::char_bytes_array();
-    for (uint32_t b = 0; b <= 255; ++b) {
+    for (TokenId b = 0; b <= 255; ++b) {
         char32_t ch = b2c[static_cast<uint8_t>(b)];
         uint8_t back = c2b[ch];
         EXPECT_EQ(back, static_cast<uint8_t>(b)) << "round-trip failed for byte " << b;
