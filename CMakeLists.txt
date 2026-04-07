@@ -55,14 +55,16 @@ if(NOT TARGET re2::re2)
         )
         set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
         FetchContent_Populate(re2)
-        # Override install() to prevent RE2's export targets from conflicting
-        # with abseil targets that aren't in any install export set.
-        macro(install)
-        endmacro()
+        # Suppress RE2's install() rules: EXCLUDE_FROM_ALL prevents install,
+        # but RE2 still generates export() targets. Disable all install-related options.
+        set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+        set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+        # Block RE2's install(EXPORT) by scoping with EXCLUDE_FROM_ALL and
+        # prevent the export set from being generated
+        set(CMAKE_SKIP_INSTALL_RULES ON)
         add_subdirectory(${re2_SOURCE_DIR} ${re2_BINARY_DIR} EXCLUDE_FROM_ALL)
-        macro(install)
-            _install(${ARGV})
-        endmacro()
+        set(CMAKE_SKIP_INSTALL_RULES OFF)
     endif()
 endif()
 
