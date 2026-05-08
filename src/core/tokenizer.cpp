@@ -398,6 +398,36 @@ Result<std::string> Tokenizer::apply_chat_template(
     return it->second.apply(messages, add_generation_prompt);
 }
 
+Result<std::string> Tokenizer::apply_chat_template_json(
+    const nlohmann::json& messages_json,
+    bool add_generation_prompt,
+    const std::string& template_name) const {
+    auto tmpl_str = chat_template_str(template_name);
+    if (tmpl_str.empty()) {
+        return make_error("No chat template available");
+    }
+
+    // Reuse the same compiled-template cache as the flat-message overload.
+    auto it = template_cache_.find(tmpl_str);
+    if (it == template_cache_.end()) {
+        std::lock_guard<std::mutex> lock(*template_cache_mutex_);
+        it = template_cache_.find(tmpl_str);
+        if (it == template_cache_.end()) {
+            std::optional<std::string> bos = config_ ? config_->bos_token : std::nullopt;
+            std::optional<std::string> eos = config_ ? config_->eos_token : std::nullopt;
+            try {
+                auto [inserted_it, _] = template_cache_.emplace(
+                    tmpl_str, ChatTemplate(sanitise_template(tmpl_str), bos, eos));
+                it = inserted_it;
+            } catch (const std::exception& e) {
+                return make_error(std::string("Chat template error: ") + e.what());
+            }
+        }
+    }
+
+    return it->second.apply_json(messages_json, add_generation_prompt);
+}
+
 Result<Encoding> Tokenizer::encode_chat(
     const std::vector<ChatMessage>& messages,
     bool add_generation_prompt,

@@ -127,6 +127,13 @@ public:
         const std::string& template_str,
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true) const;
+    /// Apply the chat template to pre-built JSON messages (e.g. structured
+    /// multimodal content with `content[]` parts). Uses the same template
+    /// cache as the flat-message overload.
+    [[nodiscard]] Result<std::string> apply_chat_template_json(
+        const nlohmann::json& messages_json,
+        bool add_generation_prompt = true,
+        const std::string& template_name = "default") const;
     [[nodiscard]] Result<Encoding> encode_chat(
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true,
