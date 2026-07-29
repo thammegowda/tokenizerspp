@@ -64,7 +64,7 @@ struct Token {
 
 // Test operations — used in 'is' expressions (e.g., "is defined")
 enum class TestOp {
-    Defined, Undefined, None, True, False,
+    Defined, Undefined, None, True, False, Boolean,
     String, Number, Integer, Float,
     Mapping, Iterable, Sequence, Callable,
     Even, Odd,
@@ -79,7 +79,7 @@ enum class FilterId {
     Replace, Map, SelectAttr, Batch, Reverse,
     Sort, Reject, RejectAttr, Select, Abs,
     Round, Truncate, Indent, Capitalize,
-    Unique, DictSort,
+    Unique, DictSort, Items,
     Unknown,
 };
 
@@ -114,7 +114,7 @@ struct BinaryExpr   { BinOp op; ExprPtr left, right; };
 struct UnaryExpr    { UnOp op; ExprPtr operand; };
 struct GetAttrExpr  { ExprPtr object; std::string attr; };
 struct GetItemExpr  { ExprPtr object; ExprPtr key; };
-struct SliceExpr    { ExprPtr object; ExprPtr start, end; };
+struct SliceExpr    { ExprPtr object; ExprPtr start, end, step; };
 struct CallExpr     {
     ExprPtr callee;
     std::vector<ExprPtr> args;
@@ -157,6 +157,7 @@ enum class NodeType {
     For,
     If,
     Set,
+    Macro,    // {% macro name(params) %} ... {% endmacro %}
     Block,    // sequence of nodes
 };
 
@@ -168,11 +169,13 @@ struct IfBranch {
 struct Node {
     NodeType type;
     std::string text;                 // for Text
-    ExprPtr expr;                     // for Output, Set value
-    std::string var_name;             // for For (loop var), Set (var name)
+    ExprPtr expr;                     // for Output, Set value (nullptr => block set)
+    std::string var_name;             // for For (loop var), Set (var name), Macro (name)
     ExprPtr iterable;                 // for For
-    std::vector<NodePtr> body;        // for For, Block
+    std::vector<NodePtr> body;        // for For, Block, Macro, block-Set
     std::vector<IfBranch> branches;   // for If (if/elif/else)
+    // for Macro: parameter names with optional default-value expressions
+    std::vector<std::pair<std::string, ExprPtr>> params;
 };
 
 /// Parse template tokens into an AST.

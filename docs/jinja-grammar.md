@@ -47,7 +47,12 @@ elif_stmt      ::= 'elif' expression
 else_stmt      ::= 'else'
 endif_stmt     ::= 'endif'
 
-set_stmt       ::= 'set' target '=' expression
+set_stmt       ::= 'set' target '=' expression      -- inline assignment
+                 | 'set' target                     -- block: {% set x %}...{% endset %}
+endset_stmt    ::= 'endset'
+
+macro_stmt     ::= 'macro' IDENT '(' [ param_list ] ')'
+endmacro_stmt  ::= 'endmacro'
 
 target_list    ::= target { ',' target }
 target         ::= IDENT | IDENT '.' IDENT    -- namespace attribute assignment
@@ -87,7 +92,7 @@ unary_expr     ::= ('-' | '+') unary_expr
 postfix_expr   ::= primary { postfix_op }
 postfix_op     ::= '.' IDENT                     -- attribute access
                  | '[' expression ']'             -- subscript
-                 | '[' [expression] ':' [expression] ']'  -- slice
+                 | '[' [expression] ':' [expression] [ ':' [expression] ] ']'  -- slice
                  | '(' [arg_list] ')'             -- function call
                  | '|' IDENT [ '(' [arg_list] ')' ]       -- filter
 
@@ -254,16 +259,28 @@ Inside `{% for %}` blocks:
 ### ✅ Implemented
 - All expression types, literals, operators
 - For/if/elif/else/set/endfor/endif/endset
+- Block set: `{% set x %}...{% endset %}` (captures rendered body)
+- Macros: `{% macro name(p, k=default) %}...{% endmacro %}` with positional
+  args, keyword args, default values, and recursion (capped at 64 nested calls,
+  beyond which rendering fails with an error). Macros push a scope onto
+  the current stack, so they can read globals and mutate enclosing `namespace`
+  objects. Invoked via `{{ name(args) }}` (result is the rendered string).
 - Filters: length, trim, default, first, last, upper, lower, title, join,
-  replace, tojson, int, float, string, list, map, selectattr, batch, reverse
-- Tests: defined, undefined, none, string, iterable, true, false, eq/ne
-- Functions: raise_exception, namespace
+  replace, tojson, int, float, string, list, map, map('filter'), selectattr,
+  batch, reverse, dictsort (case-insensitive unless `dictsort(true)`), items
+- Tests: defined, undefined, none, string, number, integer, float, iterable,
+  sequence, mapping, callable, boolean, true, false, even, odd, eq/ne
+- Functions: raise_exception, namespace, range, dict
+- String/object methods (.upper, .lower, .strip, .lstrip, .rstrip, .split,
+  .replace, .startswith, .endswith, .items, .keys, .values, .get)
 - Whitespace control, comments
-- List slicing, dict literals, negative indexing
-- String/object methods (.upper, .lower, .strip, .split, .replace,
-  .startswith, .endswith, .items, .keys, .values, .get)
+- List slicing with step (e.g. `xs[::-1]`, `xs[1:4]`, `xs[::2]`), dict
+  literals, negative indexing. Out-of-range bounds and steps are clamped to the
+  sequence length, as in Python.
+- Loop variables incl. `loop.previtem` / `loop.nextitem` (null at boundaries)
+- Undefined variables are falsy (`{% if missing %}` → false)
 
 ### ⬜ Not needed for chat templates
-- Macros, template inheritance, import, include
-- Recursive loops, block set, filter blocks
+- Template inheritance, import, include
+- Recursive loops (`{% for ... recursive %}`), filter blocks, `{% call %}`
 - HTML escaping

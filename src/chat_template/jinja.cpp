@@ -25,6 +25,7 @@ TestOp string_to_test_op(const std::string& s) {
         {"none",      TestOp::None},
         {"true",      TestOp::True},
         {"false",     TestOp::False},
+        {"boolean",   TestOp::Boolean},
         {"string",    TestOp::String},
         {"number",    TestOp::Number},
         {"integer",   TestOp::Integer},
@@ -78,6 +79,7 @@ FilterId string_to_filter_id(const std::string& s) {
         {"capitalize", FilterId::Capitalize},
         {"unique",     FilterId::Unique},
         {"dictsort",   FilterId::DictSort},
+        {"items",      FilterId::Items},
     };
     auto it = map.find(s);
     if (it != map.end()) return it->second;
@@ -506,29 +508,29 @@ struct ExprParser {
                 expr = make_expr(GetAttrExpr{std::move(expr), std::move(attr)});
             } else if (at(TokenKind::LBracket)) {
                 advance();
+                // Optional start index
+                ExprPtr start_expr;
+                if (!at(TokenKind::Colon))
+                    start_expr = parse_expression();
                 if (at(TokenKind::Colon)) {
-                    // [:end] or [:]
+                    // Slice: [start:end], [start:end:step], [::step], etc.
                     advance();
                     ExprPtr end_expr;
-                    if (!at(TokenKind::RBracket))
+                    if (!at(TokenKind::Colon) && !at(TokenKind::RBracket))
                         end_expr = parse_expression();
-                    expect(TokenKind::RBracket);
-                    expr = make_expr(SliceExpr{std::move(expr), nullptr, std::move(end_expr)});
-                } else {
-                    auto start_expr = parse_expression();
+                    ExprPtr step_expr;
                     if (at(TokenKind::Colon)) {
-                        // [start:] or [start:end]
                         advance();
-                        ExprPtr end_expr;
                         if (!at(TokenKind::RBracket))
-                            end_expr = parse_expression();
-                        expect(TokenKind::RBracket);
-                        expr = make_expr(SliceExpr{std::move(expr), std::move(start_expr), std::move(end_expr)});
-                    } else {
-                        // [key]
-                        expect(TokenKind::RBracket);
-                        expr = make_expr(GetItemExpr{std::move(expr), std::move(start_expr)});
+                            step_expr = parse_expression();
                     }
+                    expect(TokenKind::RBracket);
+                    expr = make_expr(SliceExpr{std::move(expr), std::move(start_expr),
+                                               std::move(end_expr), std::move(step_expr)});
+                } else {
+                    // Subscript: [key]
+                    expect(TokenKind::RBracket);
+                    expr = make_expr(GetItemExpr{std::move(expr), std::move(start_expr)});
                 }
             } else if (at(TokenKind::LParen)) {
                 std::vector<ExprPtr> args;
@@ -707,6 +709,8 @@ struct TemplateParser {
                 return parse_for();
             } else if (starts_with_keyword(trimmed, "if")) {
                 return parse_if();
+            } else if (starts_with_keyword(trimmed, "macro")) {
+                return parse_macro();
             } else if (starts_with_keyword(trimmed, "set")) {
                 return parse_set();
             } else {
@@ -802,12 +806,52 @@ struct TemplateParser {
             ep.advance();
             var_name += "." + ep.expect(TokenKind::Ident).text;
         }
-        ep.expect(TokenKind::Assign);
 
         auto node = std::make_unique<Node>();
         node->type = NodeType::Set;
         node->var_name = var_name;
-        node->expr = ep.parse_expression();
+        if (ep.at(TokenKind::Assign)) {
+            // Inline set: {% set var = expr %}
+            ep.advance();
+            node->expr = ep.parse_expression();
+        } else {
+            // Block set: {% set var %} ... {% endset %}
+            // node->expr stays null as the sentinel; body holds the content.
+            node->expr = nullptr;
+            node->body = parse_body({"endset"});
+            if (!at_end() && starts_with_keyword(trim(current().value), "endset"))
+                pos++;
+        }
+        return node;
+    }
+
+    NodePtr parse_macro() {
+        auto toks = lex_expression(current().value);
+        pos++;
+
+        ExprParser ep{toks};
+        ep.expect(TokenKind::Ident);  // 'macro' keyword (lexes as identifier)
+
+        auto node = std::make_unique<Node>();
+        node->type = NodeType::Macro;
+        node->var_name = ep.expect(TokenKind::Ident).text;  // macro name
+        ep.expect(TokenKind::LParen);
+        while (!ep.at(TokenKind::RParen)) {
+            std::string pname = ep.expect(TokenKind::Ident).text;
+            ExprPtr default_expr;
+            if (ep.at(TokenKind::Assign)) {
+                ep.advance();
+                default_expr = ep.parse_expression();
+            }
+            node->params.emplace_back(std::move(pname), std::move(default_expr));
+            if (ep.at(TokenKind::Comma)) ep.advance();
+            else break;
+        }
+        ep.expect(TokenKind::RParen);
+
+        node->body = parse_body({"endmacro"});
+        if (!at_end() && starts_with_keyword(trim(current().value), "endmacro"))
+            pos++;
         return node;
     }
 };
@@ -820,6 +864,8 @@ struct TemplateParser {
 
 bool is_truthy(const json& val) {
     if (val.is_null()) return false;
+    // The undefined sentinel is falsy (a missing variable is false in Jinja).
+    if (val.is_string() && val.get<std::string>() == "__jinja_undefined__") return false;
     if (val.is_boolean()) return val.get<bool>();
     if (val.is_number_integer()) return val.get<int64_t>() != 0;
     if (val.is_number_float()) return val.get<double>() != 0.0;
@@ -1064,6 +1110,42 @@ json reverse(const json& value, const std::vector<json>& /*args*/) {
     return value;
 }
 
+json dictsort(const json& value, const std::vector<json>& args) {
+    // Sort a mapping by key, returning a list of [key, value] pairs.
+    // Like Jinja, keys compare case-insensitively unless the first argument
+    // (case_sensitive) is true.
+    bool case_sensitive = !args.empty() && is_truthy(args[0]);
+    auto fold = [](const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (unsigned char c : s) out.push_back(static_cast<char>(std::tolower(c)));
+        return out;
+    };
+    json arr = json::array();
+    if (value.is_object()) {
+        std::vector<std::string> keys;
+        keys.reserve(value.size());
+        for (auto& [k, v] : value.items()) keys.push_back(k);
+        std::sort(keys.begin(), keys.end(),
+                  [&](const std::string& a, const std::string& b) {
+                      if (case_sensitive) return a < b;
+                      const auto fa = fold(a), fb = fold(b);
+                      // Raw keys break ties so the order stays deterministic.
+                      return fa != fb ? fa < fb : a < b;
+                  });
+        for (const auto& k : keys) arr.push_back(json::array({k, value[k]}));
+    }
+    return arr;
+}
+
+json items(const json& value, const std::vector<json>& /*args*/) {
+    // Mapping -> list of [key, value] pairs (insertion order).
+    json arr = json::array();
+    if (value.is_object())
+        for (auto& [k, v] : value.items()) arr.push_back(json::array({k, v}));
+    return arr;
+}
+
 } // namespace filters
 
 // ──────────────────────────────────────────────────────
@@ -1140,6 +1222,22 @@ json str_endswith(const std::string& s, const std::vector<json>& args) {
     return json(false);
 }
 
+json str_lstrip(const std::string& s, const std::vector<json>& args) {
+    std::string chars = " \t\n\r";
+    if (!args.empty() && args[0].is_string()) chars = args[0].get<std::string>();
+    auto start = s.find_first_not_of(chars);
+    if (start == std::string::npos) return std::string();
+    return json(s.substr(start));
+}
+
+json str_rstrip(const std::string& s, const std::vector<json>& args) {
+    std::string chars = " \t\n\r";
+    if (!args.empty() && args[0].is_string()) chars = args[0].get<std::string>();
+    auto end = s.find_last_not_of(chars);
+    if (end == std::string::npos) return std::string();
+    return json(s.substr(0, end + 1));
+}
+
 // -- Dict methods --
 
 json dict_items(const json& obj, const std::vector<json>& /*args*/) {
@@ -1183,6 +1281,7 @@ bool undefined(const json& val) { return is_undefined(val); }
 bool none(const json& val)      { return val.is_null() || is_undefined(val); }
 bool is_true(const json& val)   { return val.is_boolean() && val.get<bool>(); }
 bool is_false(const json& val)  { return val.is_boolean() && !val.get<bool>(); }
+bool boolean(const json& val)   { return val.is_boolean(); }
 bool string(const json& val)    { return val.is_string() && !is_undefined(val); }
 bool number(const json& val)    { return val.is_number(); }
 bool integer(const json& val)   { return val.is_number_integer(); }
@@ -1229,6 +1328,8 @@ static const std::unordered_map<FilterId, FilterFn> SIMPLE_FILTERS = {
     {FilterId::Replace, filters::replace},
     {FilterId::Batch,   filters::batch},
     {FilterId::Reverse, filters::reverse},
+    {FilterId::DictSort, filters::dictsort},
+    {FilterId::Items,   filters::items},
 };
 
 using StrMethodFn = std::function<json(const std::string&, const std::vector<json>&)>;
@@ -1241,6 +1342,8 @@ static const std::unordered_map<std::string, StrMethodFn> STRING_METHODS = {
     {"replace",    methods::str_replace},
     {"startswith", methods::str_startswith},
     {"endswith",   methods::str_endswith},
+    {"lstrip",     methods::str_lstrip},
+    {"rstrip",     methods::str_rstrip},
 };
 
 using DictMethodFn = std::function<json(const json&, const std::vector<json>&)>;
@@ -1260,6 +1363,7 @@ static const std::unordered_map<TestOp, TestFn> BUILTIN_TESTS = {
     {TestOp::None,      tests::none},
     {TestOp::True,      tests::is_true},
     {TestOp::False,     tests::is_false},
+    {TestOp::Boolean,   tests::boolean},
     {TestOp::String,    tests::string},
     {TestOp::Number,    tests::number},
     {TestOp::Integer,   tests::integer},
@@ -1284,6 +1388,8 @@ struct Evaluator {
     std::string error_msg;
     bool has_error = false;
     std::vector<json*> scope_stack;
+    std::unordered_map<std::string, const Node*> macros;
+    int macro_depth = 0;
 
     Evaluator(const json& context) : vars(context) {
         scope_stack.push_back(&vars);
@@ -1379,27 +1485,45 @@ struct Evaluator {
         return UNDEFINED;
     }
 
+    /// Fold a negative slice index against @p len and clamp it into [lo, hi],
+    /// saturating instead of overflowing on extreme values (e.g. -1e12).
+    static int64_t clamp_index(int64_t idx, int64_t len, int64_t lo, int64_t hi) {
+        if (idx < 0) idx = (idx < -len) ? lo : idx + len;
+        return std::min(std::max(idx, lo), hi);
+    }
+
     json eval_slice(const SliceExpr& e) {
         auto obj = eval(*e.object);
-        if (obj.is_array()) {
-            int64_t len = static_cast<int64_t>(obj.size());
-            int64_t start = 0, end = len;
-            if (e.start) {
-                start = eval(*e.start).get<int64_t>();
-                if (start < 0) start += len;
-                if (start < 0) start = 0;
-            }
-            if (e.end) {
-                end = eval(*e.end).get<int64_t>();
-                if (end < 0) end += len;
-                if (end > len) end = len;
-            }
-            json result = json::array();
-            for (int64_t i = start; i < end; i++)
-                result.push_back(obj[static_cast<size_t>(i)]);
-            return result;
+        if (!obj.is_array()) return UNDEFINED;
+        int64_t len = static_cast<int64_t>(obj.size());
+        int64_t step = 1;
+        if (e.step) {
+            auto sv = eval(*e.step);
+            if (sv.is_number_integer()) step = sv.get<int64_t>();
+            if (step == 0) step = 1;
         }
-        return UNDEFINED;
+        // |step| >= len yields at most one element, so clamping the magnitude
+        // keeps the result identical while stopping `i += step` from overflowing.
+        if (len > 0) step = std::min(std::max(step, -len), len);
+
+        json result = json::array();
+        if (step > 0) {
+            // Both bounds live in [0, len], so the loop is bounded by len.
+            int64_t start = 0, end = len;
+            if (e.start) start = clamp_index(eval(*e.start).get<int64_t>(), len, 0, len);
+            if (e.end) end = clamp_index(eval(*e.end).get<int64_t>(), len, 0, len);
+            for (int64_t i = start; i < end; i += step)
+                result.push_back(obj[static_cast<size_t>(i)]);
+        } else {
+            // Negative step: iterate high -> low (e.g. [::-1] reverses).
+            // Both bounds live in [-1, len-1], so the loop is bounded by len.
+            int64_t start = len - 1, end = -1;
+            if (e.start) start = clamp_index(eval(*e.start).get<int64_t>(), len, -1, len - 1);
+            if (e.end) end = clamp_index(eval(*e.end).get<int64_t>(), len, -1, len - 1);
+            for (int64_t i = start; i > end; i += step)
+                result.push_back(obj[static_cast<size_t>(i)]);
+        }
+        return result;
     }
 
     json eval_cond(const CondExpr& e) {
@@ -1554,6 +1678,11 @@ struct Evaluator {
 
         // Global function call: name(args, kwargs)
         if (auto* ident = std::get_if<IdentExpr>(e.callee.get())) {
+            // User-defined macro call takes precedence over builtins.
+            auto mit = macros.find(ident->name);
+            if (mit != macros.end())
+                return invoke_macro(*mit->second, args, kwargs);
+
             auto it = BUILTIN_FUNCTIONS.find(ident->name);
             if (it != BUILTIN_FUNCTIONS.end()) {
                 try {
@@ -1606,16 +1735,31 @@ struct Evaluator {
                 for (const auto& [k, v] : kwargs) {
                     if (k == "attribute") attr = json_to_string(v);
                 }
-                if (attr.empty() && !args.empty())
-                    attr = json_to_string(args[0]);
-                json arr = json::array();
-                for (const auto& item : val) {
-                    if (item.is_object() && item.contains(attr))
-                        arr.push_back(item[attr]);
-                    else
-                        arr.push_back(UNDEFINED);
+                if (!attr.empty()) {
+                    // map(attribute='name') — extract an attribute from each item.
+                    json arr = json::array();
+                    for (const auto& item : val) {
+                        if (item.is_object() && item.contains(attr))
+                            arr.push_back(item[attr]);
+                        else
+                            arr.push_back(UNDEFINED);
+                    }
+                    return arr;
                 }
-                return arr;
+                if (!args.empty()) {
+                    // map('filter_name', extra_args...) — apply a filter to each item.
+                    FilterId fid = string_to_filter_id(json_to_string(args[0]));
+                    std::vector<json> fargs(args.begin() + 1, args.end());
+                    auto fit = SIMPLE_FILTERS.find(fid);
+                    json arr = json::array();
+                    for (const auto& item : val) {
+                        if (fit != SIMPLE_FILTERS.end())
+                            arr.push_back(fit->second(item, fargs));
+                        else
+                            arr.push_back(item);
+                    }
+                    return arr;
+                }
             }
             return val;
         }
@@ -1646,6 +1790,53 @@ struct Evaluator {
         default:
             return val;  // Unimplemented filters pass through
         }
+    }
+
+    // ---- Macro invocation — renders the macro body into a string ----
+
+    /// Guards against a self-recursive macro overflowing the stack. Templates
+    /// come from model repos, so a runaway definition must fail, not crash.
+    static constexpr int MAX_MACRO_DEPTH = 64;
+
+    json invoke_macro(const Node& macro, const std::vector<json>& args,
+                      const KwargsVec& kwargs) {
+        if (macro_depth >= MAX_MACRO_DEPTH) {
+            error_msg = "macro recursion too deep in '" + macro.var_name + "' (max " +
+                        std::to_string(MAX_MACRO_DEPTH) + ")";
+            has_error = true;
+            return UNDEFINED;
+        }
+        json scope = json::object();
+        for (size_t i = 0; i < macro.params.size(); i++) {
+            const auto& pname = macro.params[i].first;
+            const auto& pdefault = macro.params[i].second;
+            json val = UNDEFINED;
+            if (i < args.size()) {
+                val = args[i];
+            } else {
+                bool found = false;
+                for (const auto& [k, v] : kwargs) {
+                    if (k == pname) { val = v; found = true; break; }
+                }
+                if (!found && pdefault) val = eval(*pdefault);
+            }
+            scope[pname] = val;
+        }
+        // Push the macro scope onto the current stack so the body can read
+        // globals and mutate enclosing namespace objects (e.g. counters).
+        scope_stack.push_back(&scope);
+        macro_depth++;
+        std::string saved = std::move(output);
+        output.clear();
+        for (const auto& child : macro.body) {
+            exec(*child);
+            if (has_error) break;
+        }
+        std::string result = std::move(output);
+        output = std::move(saved);
+        macro_depth--;
+        scope_stack.pop_back();
+        return json(result);
     }
 
     // ---- Statement execution ----
@@ -1724,6 +1915,9 @@ struct Evaluator {
                 loop_var["length"]    = static_cast<int64_t>(length);
                 loop_var["revindex"]  = static_cast<int64_t>(length - i);
                 loop_var["revindex0"] = static_cast<int64_t>(length - i - 1);
+                // previtem/nextitem are null (falsy) at the sequence boundaries.
+                loop_var["previtem"]  = (i > 0) ? iterable[i - 1] : json(nullptr);
+                loop_var["nextitem"]  = (i + 1 < length) ? iterable[i + 1] : json(nullptr);
                 loop_scope["loop"]    = loop_var;
 
                 for (const auto& child : node.body) {
@@ -1749,10 +1943,28 @@ struct Evaluator {
             break;
 
         case NodeType::Set: {
-            auto val = eval(*node.expr);
-            set_var(node.var_name, val);
+            if (node.expr) {
+                auto val = eval(*node.expr);
+                set_var(node.var_name, val);
+            } else {
+                // Block set: render the body into a string and assign it.
+                std::string saved = std::move(output);
+                output.clear();
+                for (const auto& child : node.body) {
+                    exec(*child);
+                    if (has_error) break;
+                }
+                std::string captured = std::move(output);
+                output = std::move(saved);
+                if (!has_error) set_var(node.var_name, json(captured));
+            }
             break;
         }
+
+        case NodeType::Macro:
+            // Register the macro definition; produces no output itself.
+            macros[node.var_name] = &node;
+            break;
         }
     }
 };

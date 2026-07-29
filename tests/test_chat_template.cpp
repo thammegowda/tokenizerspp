@@ -940,6 +940,8 @@ std::string test_dir() {
 
 const std::string GEMMA3_TEMPLATE = read_file(test_dir() + "/chat-templates/gemma3.jinja");
 const std::string TRANSLATE_GEMMA_TEMPLATE = read_file(test_dir() + "/chat-templates/translate-gemma.jinja");
+const std::string GEMMA4_TEMPLATE = read_file(test_dir() + "/chat-templates/gemma4.jinja");
+const std::string QWEN35_TEMPLATE = read_file(test_dir() + "/chat-templates/qwen3_5.jinja");
 
 
 } // anonymous namespace
@@ -1149,4 +1151,246 @@ TEST(Gemma3ChatTest, WhitespaceTrimming) {
     EXPECT_TRUE(result->find("Hello<end_of_turn>") != std::string::npos);
     // No leading/trailing spaces around "Hello"
     EXPECT_TRUE(result->find("  Hello") == std::string::npos);
+}
+
+// ============================================================================
+// Macros ({% macro %} ... {% endmacro %})
+// ============================================================================
+
+TEST(JinjaMacroTest, BasicDefineAndCall) {
+    ChatTemplate ct("{%- macro greet(x) -%}Hello {{ x }}!{%- endmacro -%}{{ greet('world') }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "Hello world!");
+}
+
+TEST(JinjaMacroTest, DefaultParametersAndKwargs) {
+    ChatTemplate ct(
+        "{%- macro g(x, y=true) -%}{{ x }}/{{ y }}{%- endmacro -%}"
+        "{{ g('a') }}|{{ g('a', false) }}|{{ g('a', y=false) }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "a/True|a/False|a/False");
+}
+
+TEST(JinjaMacroTest, Recursion) {
+    ChatTemplate ct(
+        "{%- macro fmt(v) -%}"
+        "{%- if v is sequence and v is not string -%}"
+        "[{% for i in v %}{{ fmt(i) }}{% if not loop.last %},{% endif %}{% endfor %}]"
+        "{%- else -%}{{ v }}{%- endif -%}"
+        "{%- endmacro -%}{{ fmt([1, [2, 3], 4]) }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "[1,[2,3],4]");
+}
+
+TEST(JinjaMacroTest, MutatesEnclosingNamespace) {
+    // A macro can mutate a namespace declared in the enclosing (global) scope.
+    ChatTemplate ct(
+        "{%- set ns = namespace(count=0) -%}"
+        "{%- macro bump() -%}{%- set ns.count = ns.count + 1 -%}{%- endmacro -%}"
+        "{{ bump() }}{{ bump() }}{{ bump() }}{{ ns.count }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "3");
+}
+
+// Unbounded recursion must surface as an error, not blow the stack.
+TEST(JinjaMacroTest, RunawayRecursionIsAnError) {
+    ChatTemplate ct("{%- macro loop_forever() -%}{{ loop_forever() }}{%- endmacro -%}{{ loop_forever() }}");
+    auto result = ct.apply({}, false);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("recursion too deep"), std::string::npos)
+        << result.error().message();
+}
+
+// ============================================================================
+// Block set ({% set x %} ... {% endset %})
+// ============================================================================
+
+TEST(JinjaBlockSetTest, CapturesRenderedBody) {
+    ChatTemplate ct("{%- set cap -%}A{{ 'B' }}C{%- endset -%}[{{ cap }}]");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "[ABC]");
+}
+
+// ============================================================================
+// Slice with step (e.g. messages[::-1])
+// ============================================================================
+
+TEST(JinjaSliceTest, StepAndReverse) {
+    ChatTemplate ct(
+        "{% set xs = [1,2,3,4,5] %}{{ xs[::-1] }}|{{ xs[1:] }}|{{ xs[::2] }}|{{ xs[1:4] }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "[5,4,3,2,1]|[2,3,4,5]|[1,3,5]|[2,3,4]");
+}
+
+// Out-of-range bounds and huge steps must stay bounded by the sequence length.
+TEST(JinjaSliceTest, OutOfRangeBoundsAreClamped) {
+    ChatTemplate ct(
+        "{% set xs = [1,2,3] %}"
+        "{{ xs[2:-1000000000000:-1] }}|{{ xs[-1000000000000:] }}|"
+        "{{ xs[:1000000000000] }}|{{ xs[::1000000000000] }}|{{ xs[::-1000000000000] }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "[3,2,1]|[1,2,3]|[1,2,3]|[1]|[3]");
+}
+
+// ============================================================================
+// loop.previtem / loop.nextitem
+// ============================================================================
+
+TEST(JinjaLoopTest, PrevAndNextItem) {
+    ChatTemplate ct(
+        "{% for m in messages %}"
+        "{{ loop.previtem.role | default('_') }}<{{ m.role }}>{{ loop.nextitem.role | default('_') }} "
+        "{% endfor %}");
+    json ms = json::array({
+        {{"role", "a"}, {"content", "1"}},
+        {{"role", "b"}, {"content", "2"}},
+        {{"role", "c"}, {"content", "3"}},
+    });
+    auto result = ct.apply_json(ms, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "_<a>b a<b>c b<c>_ ");
+}
+
+// ============================================================================
+// New filters / tests / methods
+// ============================================================================
+
+TEST(JinjaFilterTest, BooleanTest) {
+    ChatTemplate ct("{{ true is boolean }}/{{ 'x' is boolean }}/{{ 1 is boolean }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "True/False/False");
+}
+
+TEST(JinjaFilterTest, DictSort) {
+    ChatTemplate ct(
+        "{% set d = {'b': 2, 'a': 1, 'c': 3} %}"
+        "{% for k, v in d | dictsort %}{{ k }}={{ v }};{% endfor %}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "a=1;b=2;c=3;");
+}
+
+// Jinja's dictsort is case-insensitive by default; case_sensitive=true opts out.
+TEST(JinjaFilterTest, DictSortCaseSensitivity) {
+    ChatTemplate ct(
+        "{% set d = {'B': 2, 'a': 1, 'C': 3} %}"
+        "{% for k, v in d | dictsort %}{{ k }};{% endfor %}|"
+        "{% for k, v in d | dictsort(true) %}{{ k }};{% endfor %}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "a;B;C;|B;C;a;");
+}
+
+TEST(JinjaFilterTest, ItemsFilter) {
+    ChatTemplate ct(
+        "{% set d = {'x': 1, 'y': 2} %}"
+        "{% for k, v in d | items %}{{ k }}:{{ v }},{% endfor %}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "x:1,y:2,");
+}
+
+TEST(JinjaFilterTest, MapWithFilterName) {
+    ChatTemplate ct("{{ ['a','b','c'] | map('upper') | list | join('-') }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "A-B-C");
+}
+
+TEST(JinjaMethodTest, RstripLstrip) {
+    ChatTemplate ct(
+        "{{ '  hi\\n'.rstrip() }}|{{ '\\n\\nhi'.lstrip() }}|"
+        "{{ 'zzhizz'.rstrip('z') }}|{{ 'zzhizz'.lstrip('z') }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "  hi|hi|zzhi|hizz");
+}
+
+TEST(JinjaTruthinessTest, UndefinedIsFalsy) {
+    ChatTemplate ct(
+        "{% if undefined_thing %}Y{% else %}N{% endif %}"
+        "{% if tools %}T{% else %}F{% endif %}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "NF");
+}
+
+// ============================================================================
+// Gemma 4 canonical chat template (macros + block set + multimodal markers)
+// ============================================================================
+
+TEST(Gemma4ChatTest, TextImageConversationRenders) {
+    ASSERT_FALSE(GEMMA4_TEMPLATE.empty()) << "Failed to read gemma4.jinja";
+    ChatTemplate ct(GEMMA4_TEMPLATE, "<bos>", "<eos>");
+
+    json messages = json::array({
+        {{"role", "user"},
+         {"content", json::array({
+             {{"type", "text"}, {"text", "What is in this image?"}},
+             {{"type", "image"}},
+         })}},
+        {{"role", "assistant"}, {"content", "A cat."}},
+        {{"role", "user"}, {"content", "And this one?"}},
+    });
+
+    auto result = ct.apply_json(messages, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_TRUE(result->find("<bos>") != std::string::npos);
+    EXPECT_TRUE(result->find("What is in this image?") != std::string::npos);
+    EXPECT_TRUE(result->find("<|image|>") != std::string::npos);  // image placeholder
+    EXPECT_TRUE(result->find("A cat.") != std::string::npos);
+    EXPECT_TRUE(result->find("<|turn>model") != std::string::npos);  // generation prompt
+}
+
+TEST(Gemma4ChatTest, AudioAndVideoMarkersRender) {
+    ASSERT_FALSE(GEMMA4_TEMPLATE.empty()) << "Failed to read gemma4.jinja";
+    ChatTemplate ct(GEMMA4_TEMPLATE, "<bos>", "<eos>");
+
+    json messages = json::array({
+        {{"role", "user"},
+         {"content", json::array({
+             {{"type", "text"}, {"text", "Transcribe this."}},
+             {{"type", "audio"}},
+             {{"type", "video"}},
+         })}},
+    });
+
+    auto result = ct.apply_json(messages, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_TRUE(result->find("Transcribe this.") != std::string::npos);
+    EXPECT_TRUE(result->find("<|audio|>") != std::string::npos);
+    EXPECT_TRUE(result->find("<|video|>") != std::string::npos);
+}
+
+// ============================================================================
+// Qwen 3.5 chat template (macro + reverse slice + previtem/nextitem)
+// ============================================================================
+
+TEST(Qwen35ChatTest, TextImageConversationRenders) {
+    ASSERT_FALSE(QWEN35_TEMPLATE.empty()) << "Failed to read qwen3_5.jinja";
+    ChatTemplate ct(QWEN35_TEMPLATE, "<bos>", "<eos>");
+
+    json messages = json::array({
+        {{"role", "user"},
+         {"content", json::array({
+             {{"type", "text"}, {"text", "Describe the picture."}},
+             {{"type", "image"}},
+         })}},
+        {{"role", "assistant"}, {"content", "Sure."}},
+        {{"role", "user"}, {"content", "Thanks!"}},
+    });
+
+    auto result = ct.apply_json(messages, true);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_TRUE(result->find("Describe the picture.") != std::string::npos);
+    EXPECT_TRUE(result->find("<|vision_start|><|image_pad|><|vision_end|>") != std::string::npos);
+    EXPECT_TRUE(result->find("<|im_start|>assistant") != std::string::npos);
 }
