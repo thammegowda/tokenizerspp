@@ -2012,35 +2012,48 @@ ChatTemplate::ChatTemplate(const std::string& template_str,
       bos_token_(std::move(bos_token)),
       eos_token_(std::move(eos_token)) {}
 
-Result<std::string> ChatTemplate::apply(const std::vector<ChatMessage>& messages,
-                                         bool add_generation_prompt) const {
+namespace {
+
+/// Context keys the engine supplies itself. A caller setting one of these would
+/// be changing what the template sees about the *conversation* rather than
+/// about the model, so they are rejected instead of silently overridden.
+bool is_reserved_context_key(std::string_view key) {
+    return key == "messages" || key == "add_generation_prompt" ||
+           key == "bos_token" || key == "eos_token";
+}
+
+Result<std::string> render_template(const std::string& template_str,
+                                    const std::optional<std::string>& bos_token,
+                                    const std::optional<std::string>& eos_token,
+                                    nlohmann::json messages,
+                                    bool add_generation_prompt,
+                                    const nlohmann::json& template_args) {
     using json = nlohmann::json;
 
     json context = json::object();
 
-    json msgs = json::array();
-    for (const auto& msg : messages) {
-        json m = json::object();
-        m["role"] = msg.role;
-        m["content"] = msg.content;
-        msgs.push_back(m);
+    // Caller-supplied first, so the reserved keys below always win even if the
+    // rejection above is ever relaxed.
+    if (!template_args.is_null()) {
+        if (!template_args.is_object()) {
+            return make_error("Chat template arguments must be a JSON object");
+        }
+        for (const auto& [key, value] : template_args.items()) {
+            if (is_reserved_context_key(key)) {
+                return make_error("Chat template argument '" + key +
+                                  "' is reserved by the template engine");
+            }
+            context[key] = value;
+        }
     }
-    context["messages"] = msgs;
-    context["add_generation_prompt"] = add_generation_prompt;
 
-    if (bos_token_) {
-        context["bos_token"] = *bos_token_;
-    } else {
-        context["bos_token"] = "";
-    }
-    if (eos_token_) {
-        context["eos_token"] = *eos_token_;
-    } else {
-        context["eos_token"] = "";
-    }
+    context["messages"] = std::move(messages);
+    context["add_generation_prompt"] = add_generation_prompt;
+    context["bos_token"] = bos_token ? *bos_token : std::string{};
+    context["eos_token"] = eos_token ? *eos_token : std::string{};
 
     try {
-        auto tokens = jinja::tokenize_template(template_str_);
+        auto tokens = jinja::tokenize_template(template_str);
         auto ast = jinja::parse(tokens);
         return jinja::render(*ast, context);
     } catch (const std::exception& e) {
@@ -2048,32 +2061,27 @@ Result<std::string> ChatTemplate::apply(const std::vector<ChatMessage>& messages
     }
 }
 
+}  // namespace
+
+Result<std::string> ChatTemplate::apply(const std::vector<ChatMessage>& messages,
+                                        bool add_generation_prompt,
+                                        const nlohmann::json& template_args) const {
+    nlohmann::json msgs = nlohmann::json::array();
+    for (const auto& msg : messages) {
+        nlohmann::json m = nlohmann::json::object();
+        m["role"] = msg.role;
+        m["content"] = msg.content;
+        msgs.push_back(m);
+    }
+    return render_template(template_str_, bos_token_, eos_token_, std::move(msgs),
+                           add_generation_prompt, template_args);
+}
+
 Result<std::string> ChatTemplate::apply_json(const nlohmann::json& messages_json,
-                                         bool add_generation_prompt) const {
-    using json = nlohmann::json;
-
-    json context = json::object();
-    context["messages"] = messages_json;
-    context["add_generation_prompt"] = add_generation_prompt;
-
-    if (bos_token_) {
-        context["bos_token"] = *bos_token_;
-    } else {
-        context["bos_token"] = "";
-    }
-    if (eos_token_) {
-        context["eos_token"] = *eos_token_;
-    } else {
-        context["eos_token"] = "";
-    }
-
-    try {
-        auto tokens = jinja::tokenize_template(template_str_);
-        auto ast = jinja::parse(tokens);
-        return jinja::render(*ast, context);
-    } catch (const std::exception& e) {
-        return make_error(std::string("Template error: ") + e.what());
-    }
+                                             bool add_generation_prompt,
+                                             const nlohmann::json& template_args) const {
+    return render_template(template_str_, bos_token_, eos_token_, messages_json,
+                           add_generation_prompt, template_args);
 }
 
 } // namespace tokenizers

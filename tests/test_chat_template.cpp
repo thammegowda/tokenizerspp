@@ -1394,3 +1394,78 @@ TEST(Qwen35ChatTest, TextImageConversationRenders) {
     EXPECT_TRUE(result->find("<|vision_start|><|image_pad|><|vision_end|>") != std::string::npos);
     EXPECT_TRUE(result->find("<|im_start|>assistant") != std::string::npos);
 }
+
+// ============================================================================
+// Template arguments — per-model runtime variables in the render context
+// ============================================================================
+
+TEST(TemplateArgsTest, UnsetArgIsUndefined) {
+    // `is defined` must be false when the caller passes nothing, which is what
+    // lets a template carry its own default.
+    ChatTemplate ct("{% if flag is defined %}SET{% else %}UNSET{% endif %}");
+    auto result = ct.apply({{"user", "hi"}}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "UNSET");
+}
+
+TEST(TemplateArgsTest, ArgsReachTheRenderContext) {
+    ChatTemplate ct("{% if flag is defined and flag is false %}OFF{% else %}ON{% endif %}"
+                    "|{{ label }}|{{ n }}");
+    auto result = ct.apply({{"user", "hi"}}, false,
+                           json{{"flag", false}, {"label", "x"}, {"n", 7}});
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "OFF|x|7");
+}
+
+TEST(TemplateArgsTest, ArgsReachApplyJsonToo) {
+    ChatTemplate ct("{% if flag is defined and flag is false %}OFF{% else %}ON{% endif %}");
+    json msgs = json::array({{{"role", "user"}, {"content", "hi"}}});
+    auto off = ct.apply_json(msgs, false, json{{"flag", false}});
+    ASSERT_TRUE(off.has_value()) << off.error().message();
+    EXPECT_EQ(*off, "OFF");
+    auto on = ct.apply_json(msgs, false);
+    ASSERT_TRUE(on.has_value()) << on.error().message();
+    EXPECT_EQ(*on, "ON");
+}
+
+TEST(TemplateArgsTest, ReservedKeysAreRejected) {
+    ChatTemplate ct("{% for m in messages %}{{ m['content'] }}{% endfor %}");
+    for (const auto* key : {"messages", "add_generation_prompt", "bos_token", "eos_token"}) {
+        auto result = ct.apply({{"user", "hi"}}, false, json{{key, "hijacked"}});
+        ASSERT_FALSE(result.has_value()) << "expected '" << key << "' to be refused";
+        EXPECT_NE(result.error().message().find("reserved"), std::string::npos)
+            << "for key " << key << ": " << result.error().message();
+    }
+}
+
+TEST(TemplateArgsTest, NonObjectArgsAreRejected) {
+    ChatTemplate ct("{% for m in messages %}{{ m['content'] }}{% endfor %}");
+    auto result = ct.apply({{"user", "hi"}}, false, json::array({1, 2}));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message().find("JSON object"), std::string::npos)
+        << result.error().message();
+}
+
+// The real thing this exists for: Qwen3.5 ships a template whose generation
+// prompt opens a <think> block unless the caller says otherwise. Without a way
+// to pass `enable_thinking`, tahoma cannot serve the model in non-reasoning
+// mode at all. This pins both polarities against the shipped template.
+TEST(Qwen35ChatTest, EnableThinkingControlsTheThinkBlock) {
+    ASSERT_FALSE(QWEN35_TEMPLATE.empty()) << "Failed to read qwen3_5.jinja";
+    ChatTemplate ct(QWEN35_TEMPLATE, "<bos>", "<eos>");
+    std::vector<ChatMessage> msgs = {{"user", "Translate: hello"}};
+
+    // Default: the template opens a think block and leaves it open.
+    auto on = ct.apply(msgs, true);
+    ASSERT_TRUE(on.has_value()) << on.error().message();
+    EXPECT_NE(on->find("<think>"), std::string::npos);
+    EXPECT_EQ(on->find("</think>"), std::string::npos)
+        << "default render should leave the think block open";
+
+    // enable_thinking=false pre-closes it, so generation starts on the answer.
+    auto off = ct.apply(msgs, true, json{{"enable_thinking", false}});
+    ASSERT_TRUE(off.has_value()) << off.error().message();
+    EXPECT_NE(off->find("<think>\n\n</think>"), std::string::npos)
+        << "expected a pre-closed think block, got: " << *off;
+    EXPECT_NE(*off, *on);
+}

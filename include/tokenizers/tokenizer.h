@@ -119,25 +119,33 @@ public:
     // Chat template
     [[nodiscard]] bool has_chat_template() const;
     [[nodiscard]] std::string chat_template_str(const std::string& name = "default") const;
+    /// `template_args` is a JSON object of extra render-context variables for
+    /// templates that branch on model-specific runtime settings, e.g.
+    /// `{"enable_thinking": false}`. The accepted set is whatever the model's
+    /// own template reads; see ChatTemplate::apply.
     [[nodiscard]] Result<std::string> apply_chat_template(
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true,
-        const std::string& template_name = "default") const;
+        const std::string& template_name = "default",
+        const nlohmann::json& template_args = nlohmann::json::object()) const;
     [[nodiscard]] Result<std::string> apply_chat_template(
         const std::string& template_str,
         const std::vector<ChatMessage>& messages,
-        bool add_generation_prompt = true) const;
+        bool add_generation_prompt = true,
+        const nlohmann::json& template_args = nlohmann::json::object()) const;
     /// Apply the chat template to pre-built JSON messages (e.g. structured
     /// multimodal content with `content[]` parts). Uses the same template
     /// cache as the flat-message overload.
     [[nodiscard]] Result<std::string> apply_chat_template_json(
         const nlohmann::json& messages_json,
         bool add_generation_prompt = true,
-        const std::string& template_name = "default") const;
+        const std::string& template_name = "default",
+        const nlohmann::json& template_args = nlohmann::json::object()) const;
     [[nodiscard]] Result<Encoding> encode_chat(
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true,
-        bool add_special_tokens = true) const;
+        bool add_special_tokens = true,
+        const nlohmann::json& template_args = nlohmann::json::object()) const;
 
 private:
     ModelPtr model_;

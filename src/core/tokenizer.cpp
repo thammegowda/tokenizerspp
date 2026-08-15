@@ -363,18 +363,20 @@ std::string Tokenizer::chat_template_str(const std::string& name) const {
 Result<std::string> Tokenizer::apply_chat_template(
     const std::vector<ChatMessage>& messages,
     bool add_generation_prompt,
-    const std::string& template_name) const {
+    const std::string& template_name,
+    const nlohmann::json& template_args) const {
     auto tmpl_str = chat_template_str(template_name);
     if (tmpl_str.empty()) {
         return make_error("No chat template available");
     }
-    return apply_chat_template(tmpl_str, messages, add_generation_prompt);
+    return apply_chat_template(tmpl_str, messages, add_generation_prompt, template_args);
 }
 
 Result<std::string> Tokenizer::apply_chat_template(
     const std::string& template_str,
     const std::vector<ChatMessage>& messages,
-    bool add_generation_prompt) const {
+    bool add_generation_prompt,
+    const nlohmann::json& template_args) const {
     // Fast path (lock-free): template was eagerly compiled in with_config()
     auto it = template_cache_.find(template_str);
     if (it == template_cache_.end()) {
@@ -395,13 +397,14 @@ Result<std::string> Tokenizer::apply_chat_template(
         }
     }
 
-    return it->second.apply(messages, add_generation_prompt);
+    return it->second.apply(messages, add_generation_prompt, template_args);
 }
 
 Result<std::string> Tokenizer::apply_chat_template_json(
     const nlohmann::json& messages_json,
     bool add_generation_prompt,
-    const std::string& template_name) const {
+    const std::string& template_name,
+    const nlohmann::json& template_args) const {
     auto tmpl_str = chat_template_str(template_name);
     if (tmpl_str.empty()) {
         return make_error("No chat template available");
@@ -425,14 +428,16 @@ Result<std::string> Tokenizer::apply_chat_template_json(
         }
     }
 
-    return it->second.apply_json(messages_json, add_generation_prompt);
+    return it->second.apply_json(messages_json, add_generation_prompt, template_args);
 }
 
 Result<Encoding> Tokenizer::encode_chat(
     const std::vector<ChatMessage>& messages,
     bool add_generation_prompt,
-    bool add_special_tokens) const {
-    auto formatted = apply_chat_template(messages, add_generation_prompt);
+    bool add_special_tokens,
+    const nlohmann::json& template_args) const {
+    auto formatted = apply_chat_template(messages, add_generation_prompt, "default",
+                                         template_args);
     if (!formatted) return std::unexpected(formatted.error());
     return encode(*formatted, add_special_tokens);
 }

@@ -27,14 +27,23 @@ public:
                           std::optional<std::string> eos_token = std::nullopt);
 
     /// Apply the template to messages, returning the formatted string.
+    ///
+    /// `template_args` is a JSON object of extra variables placed in the render
+    /// context, for templates that branch on model-specific runtime settings
+    /// (`enable_thinking`, `tools`, ...). The set is per-model: it is whatever
+    /// that model's template reads. Keys the engine supplies itself
+    /// (`messages`, `add_generation_prompt`, `bos_token`, `eos_token`) are
+    /// rejected rather than overridden.
     [[nodiscard]] Result<std::string> apply(
         const std::vector<ChatMessage>& messages,
-        bool add_generation_prompt = false) const;
+        bool add_generation_prompt = false,
+        const nlohmann::json& template_args = nlohmann::json::object()) const;
 
     /// Apply the template to pre-built JSON messages (for structured content).
     [[nodiscard]] Result<std::string> apply_json(
         const nlohmann::json& messages_json,
-        bool add_generation_prompt = false) const;
+        bool add_generation_prompt = false,
+        const nlohmann::json& template_args = nlohmann::json::object()) const;
 
 private:
     std::string template_str_;
