@@ -1,7 +1,19 @@
 #include "tokenizers/processors.h"
 
+#include <stdexcept>
+
 namespace tokenizers {
 namespace processors {
+
+SequenceProcessing::SequenceProcessing(std::vector<PostProcessorPtr> processors)
+    : processors(std::move(processors)) {
+    for (const auto& processor : this->processors) {
+        if (!processor) {
+            throw std::invalid_argument(
+                "SequenceProcessing does not accept null processors");
+        }
+    }
+}
 
 size_t SequenceProcessing::added_tokens(bool is_pair) const {
     size_t total = 0;

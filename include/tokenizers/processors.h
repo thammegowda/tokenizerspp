@@ -45,13 +45,32 @@ public:
     process_encodings(std::vector<Encoding> encodings, bool add_special_tokens) const override;
 };
 
+/// ByteLevel post-processor metadata; execution is currently a no-op.
+class ByteLevelProcessing : public PostProcessor {
+public:
+    bool add_prefix_space = true;
+    bool trim_offsets = true;
+    bool use_regex = true;
+
+    ByteLevelProcessing(bool add_prefix_space = true,
+                        bool trim_offsets = true,
+                        bool use_regex = true)
+        : add_prefix_space(add_prefix_space),
+          trim_offsets(trim_offsets),
+          use_regex(use_regex) {}
+
+    [[nodiscard]] size_t added_tokens(bool is_pair) const override;
+    [[nodiscard]] Result<std::vector<Encoding>>
+    process_encodings(std::vector<Encoding> encodings,
+                      bool add_special_tokens) const override;
+};
+
 /// Sequence post-processor: chains multiple post-processors.
 class SequenceProcessing : public PostProcessor {
 public:
     std::vector<PostProcessorPtr> processors;
 
-    explicit SequenceProcessing(std::vector<PostProcessorPtr> processors)
-        : processors(std::move(processors)) {}
+    explicit SequenceProcessing(std::vector<PostProcessorPtr> processors);
 
     [[nodiscard]] size_t added_tokens(bool is_pair) const override;
     [[nodiscard]] Result<std::vector<Encoding>>

@@ -112,6 +112,7 @@ set(TOKENIZERPP_SOURCES
 
     src/processors/bert.cpp
     src/processors/roberta.cpp
+    src/processors/byte_level.cpp
     src/processors/template.cpp
     src/processors/sequence.cpp
 

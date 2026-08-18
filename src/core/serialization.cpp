@@ -241,6 +241,9 @@ static Result<PostProcessorPtr> parse_post_processor_obj(const json& j) {
         for (auto& child : j.at("processors")) {
             auto r = parse_post_processor(child);
             if (!r) return std::unexpected(r.error());
+            if (!*r) {
+                return make_error("Sequence post-processor contains a null child");
+            }
             children.push_back(std::move(*r));
         }
         return std::make_unique<processors::SequenceProcessing>(std::move(children));
@@ -285,9 +288,10 @@ static Result<PostProcessorPtr> parse_post_processor_obj(const json& j) {
             std::move(single_tmpl), std::move(pair_tmpl), std::move(special_tokens_vec));
     }
     if (type == "ByteLevel") {
-        // ByteLevel as a post-processor is essentially a no-op (just sets sequence IDs
-        // and optionally trims offsets). Return nullptr to skip post-processing.
-        return PostProcessorPtr{nullptr};
+        return std::make_unique<processors::ByteLevelProcessing>(
+            get_or(j, "add_prefix_space", true),
+            get_or(j, "trim_offsets", true),
+            get_or(j, "use_regex", true));
     }
     return make_error("Unknown post-processor type: " + type);
 }
@@ -824,6 +828,12 @@ static json serialize_post_processor(const PostProcessor* pp) {
                      {"cls", json::array({p->cls.first, p->cls.second})},
                      {"trim_offsets", p->trim_offsets},
                      {"add_prefix_space", p->add_prefix_space}};
+    }
+    if (auto* p = dynamic_cast<const processors::ByteLevelProcessing*>(pp)) {
+        return json{{"type", "ByteLevel"},
+                    {"add_prefix_space", p->add_prefix_space},
+                    {"trim_offsets", p->trim_offsets},
+                    {"use_regex", p->use_regex}};
     }
     if (auto* p = dynamic_cast<const processors::TemplateProcessing*>(pp)) {
         auto serialize_template = [](const std::vector<processors::TemplatePiece>& tmpl) {

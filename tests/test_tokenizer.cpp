@@ -10,6 +10,8 @@
 #include "tokenizers/processors.h"
 #include "tokenizers/decoders.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cstdio>
 
 namespace tokenizers {
@@ -441,6 +443,58 @@ TEST(DeserializationTest, RobertaPostProcessor) {
     auto result = Tokenizer::from_string(json);
     ASSERT_TRUE(result.has_value()) << result.error().message();
     EXPECT_NE(result->get_post_processor(), nullptr);
+}
+
+TEST(DeserializationTest, ByteLevelSequenceIsConcreteAndRoundTrips) {
+        const char* json = R"({
+            "model": {"type": "WordPiece", "unk_token": "[UNK]", "vocab": {"[UNK]": 0, "hello": 1}},
+            "post_processor": {
+                "type": "Sequence",
+                "processors": [{
+                    "type": "ByteLevel",
+                    "add_prefix_space": true,
+                    "trim_offsets": false,
+                    "use_regex": false
+                }]
+            }
+        })";
+
+        auto tokenizer = Tokenizer::from_string(json);
+        ASSERT_TRUE(tokenizer.has_value()) << tokenizer.error().message();
+        auto* sequence = dynamic_cast<const processors::SequenceProcessing*>(
+                tokenizer->get_post_processor());
+        ASSERT_NE(sequence, nullptr);
+        ASSERT_EQ(sequence->processors.size(), 1u);
+        auto* byte_level = dynamic_cast<const processors::ByteLevelProcessing*>(
+                sequence->processors.front().get());
+        ASSERT_NE(byte_level, nullptr);
+        EXPECT_TRUE(byte_level->add_prefix_space);
+        EXPECT_FALSE(byte_level->trim_offsets);
+        EXPECT_FALSE(byte_level->use_regex);
+
+        auto encoding = tokenizer->encode("hello", true);
+        ASSERT_TRUE(encoding.has_value()) << encoding.error().message();
+        EXPECT_EQ(encoding->get_ids(), std::vector<TokenId>{1});
+
+        auto serialized = tokenizer->to_string(false);
+        ASSERT_TRUE(serialized.has_value()) << serialized.error().message();
+        auto document = nlohmann::json::parse(*serialized);
+        const auto& saved = document["post_processor"]["processors"][0];
+        EXPECT_EQ(saved["type"], "ByteLevel");
+        EXPECT_EQ(saved["add_prefix_space"], true);
+        EXPECT_EQ(saved["trim_offsets"], false);
+        EXPECT_EQ(saved["use_regex"], false);
+        EXPECT_TRUE(Tokenizer::from_string(*serialized).has_value());
+
+        document["post_processor"]["processors"].push_back(nullptr);
+        auto invalid = Tokenizer::from_string(document.dump());
+        ASSERT_FALSE(invalid.has_value());
+        EXPECT_NE(invalid.error().message().find("null child"), std::string::npos);
+
+        std::vector<PostProcessorPtr> null_children;
+        null_children.push_back(nullptr);
+        EXPECT_THROW(processors::SequenceProcessing(std::move(null_children)),
+                                 std::invalid_argument);
 }
 
 TEST(DeserializationTest, TruncationAndPadding) {
