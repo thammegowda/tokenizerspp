@@ -498,6 +498,16 @@ TEST(ChatTemplateTest, NotInOperator) {
     EXPECT_EQ(*result, "not found");
 }
 
+TEST(ChatTemplateTest, TupleMembership) {
+    ChatTemplate ct(
+        "{% set effort = 'xhigh' %}"
+        "{% if effort in ('xhigh', 'medium', 'low') and "
+        "'other' not in ('xhigh', 'medium', 'low') %}supported{% endif %}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "supported");
+}
+
 // ============================================================================
 // Is defined / is none
 // ============================================================================

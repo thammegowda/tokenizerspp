@@ -615,18 +615,12 @@ Result<Tokenizer> Tokenizer::from_json(const json& j) {
 
     // added_tokens
     if (j.contains("added_tokens") && j["added_tokens"].is_array()) {
-        std::vector<AddedToken> special_tokens;
-        std::vector<AddedToken> normal_tokens;
+        std::vector<AddedToken> added_tokens;
+        added_tokens.reserve(j["added_tokens"].size());
         for (auto& tok_json : j["added_tokens"]) {
-            auto tok = parse_added_token(tok_json);
-            if (tok.special) {
-                special_tokens.push_back(std::move(tok));
-            } else {
-                normal_tokens.push_back(std::move(tok));
-            }
+            added_tokens.push_back(parse_added_token(tok_json));
         }
-        if (!special_tokens.empty()) tokenizer.add_special_tokens(special_tokens);
-        if (!normal_tokens.empty()) tokenizer.add_tokens(normal_tokens);
+        if (!added_tokens.empty()) tokenizer.add_tokens(added_tokens);
     }
 
     return tokenizer;

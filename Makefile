@@ -8,6 +8,10 @@ debug:
 	cmake -B build-debug -S . -GNinja -DCMAKE_BUILD_TYPE=Debug
 	cmake --build build-debug -j
 
+test:
+	ctest --test-dir build-debug
+
+
 bench: bench-build bench-run
 
 bench-build:

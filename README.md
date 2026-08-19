@@ -16,7 +16,8 @@ A pure C++23 rewrite of HuggingFace's [tokenizers](https://github.com/huggingfac
 
 ```bash
 make build        # Release build
-make debug        # Debug build
+make debug        # Debug build with tests
+make test         # run tests (after make debug)
 make bench        # Build + run benchmarks against Rust reference
 ```
 

@@ -393,11 +393,33 @@ TEST(DeserializationTest, BPEFromString) {
     auto& tok = *result;
 
     EXPECT_EQ(tok.token_to_id("hello"), 8u);
-
     auto enc = tok.encode("hello", true);
     ASSERT_TRUE(enc.has_value()) << enc.error().message();
     // BPE should merge h+e→he, l+l→ll, he+l→hel, l+o→lo, hel+lo→hello
     EXPECT_FALSE(enc->get_ids().empty());
+}
+
+TEST(DeserializationTest, PreservesMixedAddedTokenIds) {
+    constexpr auto json = R"({
+        "model": {
+            "type": "WordPiece",
+            "vocab": {"[UNK]": 0},
+            "unk_token": "[UNK]"
+        },
+        "added_tokens": [
+            {"id": 1, "content": "<special-a>", "special": true},
+            {"id": 2, "content": "<normal-a>", "special": false},
+            {"id": 3, "content": "<special-b>", "special": true},
+            {"id": 4, "content": "<normal-b>", "special": false}
+        ]
+    })";
+    auto result = Tokenizer::from_string(json);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    EXPECT_EQ(result->token_to_id("<special-a>"), 1u);
+    EXPECT_EQ(result->token_to_id("<normal-a>"), 2u);
+    EXPECT_EQ(result->token_to_id("<special-b>"), 3u);
+    EXPECT_EQ(result->token_to_id("<normal-b>"), 4u);
 }
 
 TEST(DeserializationTest, NullComponents) {

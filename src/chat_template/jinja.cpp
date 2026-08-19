@@ -569,11 +569,24 @@ struct ExprParser {
             return make_expr(IdentExpr{std::move(t.text)});
         }
 
-        // Parenthesized expression
+        // Parenthesized expression or tuple literal
         if (match(TokenKind::LParen)) {
-            auto expr = parse_ternary();
+            if (match(TokenKind::RParen)) {
+                return make_expr(ListExpr{});
+            }
+            auto first = parse_ternary();
+            if (!match(TokenKind::Comma)) {
+                expect(TokenKind::RParen);
+                return first;
+            }
+            std::vector<ExprPtr> items;
+            items.push_back(std::move(first));
+            while (!at(TokenKind::RParen)) {
+                items.push_back(parse_expression());
+                if (!match(TokenKind::Comma)) break;
+            }
             expect(TokenKind::RParen);
-            return expr;
+            return make_expr(ListExpr{std::move(items)});
         }
 
         // List literal
