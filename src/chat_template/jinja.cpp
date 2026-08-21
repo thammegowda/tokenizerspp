@@ -150,7 +150,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
         }
     }
 
-    // Apply whitespace trimming
+    // Apply explicit {%- / -%} controls first.
     for (size_t i = 0; i < tokens.size(); i++) {
         if (tokens[i].type != TemplateTokenType::Text) {
             if (tokens[i].trim_left && i > 0 && tokens[i - 1].type == TemplateTokenType::Text) {
@@ -170,6 +170,39 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
                 } else {
                     t.erase(0, start);
                 }
+            }
+        }
+    }
+
+    // Hugging Face enables Jinja's lstrip_blocks and trim_blocks. Strip
+    // indentation only when the block is the first non-whitespace item on its
+    // source line; whitespace before an inline block remains literal output.
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (tokens[i].type != TemplateTokenType::BlockExpr ||
+            tokens[i].trim_left || i == 0 ||
+            tokens[i - 1].type != TemplateTokenType::Text) {
+            continue;
+        }
+        auto& text = tokens[i - 1].value;
+        const auto line_break = text.find_last_of("\n\r");
+        const auto line_start = line_break == std::string::npos
+            ? size_t{0} : line_break + 1;
+        const bool at_source_line_start = line_break != std::string::npos || i == 1;
+        if (at_source_line_start &&
+            text.find_first_not_of(" \t", line_start) == std::string::npos) {
+            text.erase(line_start);
+        }
+    }
+
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (tokens[i].type == TemplateTokenType::BlockExpr &&
+            !tokens[i].trim_right && i + 1 < tokens.size() &&
+            tokens[i + 1].type == TemplateTokenType::Text) {
+            auto& text = tokens[i + 1].value;
+            if (text.starts_with("\r\n")) {
+                text.erase(0, 2);
+            } else if (text.starts_with("\n") || text.starts_with("\r")) {
+                text.erase(0, 1);
             }
         }
     }

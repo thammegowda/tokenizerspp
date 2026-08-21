@@ -198,6 +198,35 @@ TEST(ChatTemplateTest, WhitespaceControlBlocks) {
     EXPECT_EQ(*result, "hello");
 }
 
+TEST(ChatTemplateTest, DefaultBlockLineWhitespaceTrimming) {
+    ChatTemplate ct(
+        "A\n"
+        "  {% if false %}\n"
+        " ignored\n"
+        "  {% endif %}\n"
+        "  {% set x='B' %}\n"
+        "{{ x }}");
+    auto result = ct.apply({}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "A\nB");
+}
+
+TEST(ChatTemplateTest, TrimmedFalseBlockBeforeIndentedSet) {
+    ChatTemplate ct(
+        "[gMASK]<sop>\n"
+        "{%- if tools -%}\nTOOLS\n{%- endif -%}\n"
+        "{%- set ns = namespace(last=-1) %}\n"
+        "{% for m in messages %}\n"
+        "    {% if m.role == 'user' %}\n"
+        "        {% set ns.last = loop.index0 -%}\n"
+        "    {% endif %}\n"
+        "{% endfor %}\n"
+        "<|user|>");
+    auto result = ct.apply({{"user", "hello"}}, false);
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_EQ(*result, "[gMASK]<sop><|user|>");
+}
+
 // ============================================================================
 // Set statement
 // ============================================================================
