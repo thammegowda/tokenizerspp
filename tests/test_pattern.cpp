@@ -171,6 +171,14 @@ TEST(PatternTest, RegexEmpty) {
     EXPECT_EQ(*r, expected);
 }
 
+TEST(PatternTest, RegexEndAnchorMatchesEmptyInput) {
+    RegexPattern p("$");
+    auto r = p.find_matches("");
+    ASSERT_TRUE(r.has_value());
+    Matches expected = {{{0, 0}, true}};
+    EXPECT_EQ(*r, expected);
+}
+
 TEST(PatternTest, RegexUnicode) {
     RegexPattern p("\\s+");
     // 𝔾𝕠𝕠𝕕 𝕞𝕠𝕣𝕟𝕚𝕟𝕘  — each math symbol is 4 bytes, space is 1 byte

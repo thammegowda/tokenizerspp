@@ -193,10 +193,6 @@ RegexPattern& RegexPattern::operator=(RegexPattern&&) noexcept = default;
 
 Result<std::vector<PatternMatch>>
 RegexPattern::find_matches(std::string_view inside) const {
-    if (inside.empty()) {
-        return std::vector<PatternMatch>{{{0, 0}, false}};
-    }
-
     std::vector<PatternMatch> splits;
     size_t prev = 0;
     absl::string_view input(inside.data(), inside.size());
@@ -228,6 +224,9 @@ RegexPattern::find_matches(std::string_view inside) const {
 
     if (prev != inside.size()) {
         splits.push_back({{prev, inside.size()}, false});
+    }
+    if (splits.empty() && inside.empty()) {
+        splits.push_back({{0, 0}, false});
     }
     return splits;
 }

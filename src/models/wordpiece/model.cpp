@@ -30,16 +30,25 @@ size_t last_char_len(std::string_view s, size_t end) {
     return end - i;
 }
 
+size_t first_char_len(uint8_t byte) {
+    if (byte < 0x80) return 1;
+    if ((byte & 0xE0) == 0xC0) return 2;
+    if ((byte & 0xF0) == 0xE0) return 3;
+    return 4;
+}
+
 } // namespace
 
 WordPiece::WordPiece(std::unordered_map<std::string, TokenId> vocab,
                      std::string unk_token,
                      std::string continuing_subword_prefix,
-                     size_t max_input_chars_per_word)
+                                         size_t max_input_chars_per_word,
+                                         bool fuse_unk)
     : vocab_(std::move(vocab)),
       unk_token_(std::move(unk_token)),
       continuing_subword_prefix_(std::move(continuing_subword_prefix)),
-      max_input_chars_per_word_(max_input_chars_per_word) {
+            max_input_chars_per_word_(max_input_chars_per_word),
+            fuse_unk_(fuse_unk) {
     for (const auto& [token, id] : vocab_) {
         vocab_r_[id] = token;
     }
@@ -81,8 +90,19 @@ Result<std::vector<Token>> WordPiece::tokenize(std::string_view sequence) const 
         }
 
         if (!cur_str) {
-            is_bad = true;
-            break;
+            if (fuse_unk_) {
+                is_bad = true;
+                break;
+            }
+            auto unknown = vocab_.find(unk_token_);
+            if (unknown == vocab_.end()) {
+                return make_error("WordPiece: Missing [UNK] token from vocabulary");
+            }
+            size_t end = start + first_char_len(static_cast<uint8_t>(sequence[start]));
+            if (end > sequence.size()) end = sequence.size();
+            sub_tokens.push_back({unknown->second, unk_token_, {start, end}});
+            start = end;
+            continue;
         }
 
         sub_tokens.push_back(std::move(*cur_str));
