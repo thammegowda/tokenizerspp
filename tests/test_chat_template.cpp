@@ -46,6 +46,20 @@ TEST(ChatTemplateTest, NoSpecialTokens) {
     EXPECT_EQ(*result, "Hi");
 }
 
+TEST(ChatTemplateTest, CommentWhitespaceControl) {
+    for (const auto& source : {
+             "{{ 'A' }} \n{#- hidden -#}\n {{ 'B' }}",
+             "{{ 'A' }}{# hidden #}\n{{ 'B' }}",
+             "{{ 'A' }}\n{#- first -#}\n{#- second -#}\n{{ 'B' }}"}) {
+        auto result = ChatTemplate(source).apply({}, false);
+        ASSERT_TRUE(result.has_value()) << result.error().message();
+        EXPECT_EQ(*result, "AB");
+    }
+    auto preserved = ChatTemplate("A {# hidden #} B").apply({}, false);
+    ASSERT_TRUE(preserved.has_value());
+    EXPECT_EQ(*preserved, "A  B");
+}
+
 // ============================================================================
 // Filters
 // ============================================================================
