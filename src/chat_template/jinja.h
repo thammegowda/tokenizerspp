@@ -24,6 +24,7 @@ enum class TemplateTokenType {
     Text,       // literal text
     VarExpr,    // {{ expr }}
     BlockExpr,  // {% statement %}
+    Comment,
 };
 
 struct TemplateToken {

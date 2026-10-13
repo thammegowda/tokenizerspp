@@ -705,6 +705,33 @@ TEST(SerializationTest, WordPieceRoundTrip) {
     EXPECT_EQ(enc1->get_ids(), enc2->get_ids());
 }
 
+TEST(SerializationTest, WordPieceCanLeaveUnknownTokensUnfused) {
+        const char* json = R"({
+            "model": {
+                "type": "WordPiece",
+                "unk_token": "<unk>",
+                "continuing_subword_prefix": "",
+                "max_input_chars_per_word": 100,
+                "fuse_unk": false,
+                "vocab": {"<unk>": 0, "a": 1, "b": 2}
+            }
+        })";
+        auto tokenizer = Tokenizer::from_string(json);
+        ASSERT_TRUE(tokenizer.has_value()) << tokenizer.error().message();
+
+        auto encoding = tokenizer->encode("a？b", false);
+        ASSERT_TRUE(encoding.has_value()) << encoding.error().message();
+        EXPECT_EQ(encoding->get_ids(), (std::vector<TokenId>{1, 0, 2}));
+
+        auto serialized = tokenizer->to_string(false);
+        ASSERT_TRUE(serialized.has_value()) << serialized.error().message();
+        auto restored = Tokenizer::from_string(*serialized);
+        ASSERT_TRUE(restored.has_value()) << restored.error().message();
+        auto restored_encoding = restored->encode("a？b", false);
+        ASSERT_TRUE(restored_encoding.has_value()) << restored_encoding.error().message();
+        EXPECT_EQ(restored_encoding->get_ids(), encoding->get_ids());
+}
+
 TEST(SerializationTest, BPERoundTrip) {
     auto result1 = Tokenizer::from_string(kBPEJson);
     ASSERT_TRUE(result1.has_value()) << result1.error().message();

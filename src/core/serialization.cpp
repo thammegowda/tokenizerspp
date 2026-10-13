@@ -420,8 +420,9 @@ static Result<ModelPtr> parse_model(const json& j) {
         std::string unk = get_or<std::string>(j, "unk_token", "[UNK]");
         std::string prefix = get_or<std::string>(j, "continuing_subword_prefix", "##");
         size_t max_chars = get_or<size_t>(j, "max_input_chars_per_word", 100);
+        bool fuse_unk = get_or(j, "fuse_unk", true);
         return std::make_unique<models::WordPiece>(std::move(vocab), std::move(unk),
-                                                    std::move(prefix), max_chars);
+                                std::move(prefix), max_chars, fuse_unk);
     }
     if (type == "BPE") {
         auto vocab = parse_vocab(j.at("vocab"));
@@ -929,6 +930,7 @@ static json serialize_model(const Model* m) {
                      {"unk_token", p->get_unk_token()},
                      {"continuing_subword_prefix", p->get_continuing_subword_prefix()},
                      {"max_input_chars_per_word", p->get_max_input_chars_per_word()},
+                     {"fuse_unk", p->get_fuse_unk()},
                      {"vocab", vocab}};
     }
     if (auto* p = dynamic_cast<const models::BPE*>(m)) {
