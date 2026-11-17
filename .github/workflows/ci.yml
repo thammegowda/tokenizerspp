@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-24.04
+            arch: x64
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            arch: arm64
+          - name: macos-arm64
+            os: macos-26
+            arch: arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.arch }}
+
+      - name: Install CMake and Ninja
+        run: python -m pip install 'cmake>=3.25,<4' ninja
+
+      - name: Configure and build
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            cores=$(sysctl -n hw.logicalcpu)
+          else
+            cores=$(nproc)
+          fi
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$cores" >> "$GITHUB_ENV"
+          bench_flag="-DTOKENIZERPP_BUILD_BENCHMARKS=OFF"
+          if [[ -f benchmarks/CMakeLists.txt ]]; then
+            bench_flag="-DTOKENIZERPP_BUILD_BENCHMARKS=ON"
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTOKENIZERPP_BUILD_TESTS=ON \
+            "$bench_flag"
+          cmake --build build --parallel "$cores"
+
+      - name: Run C++ unit tests
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --timeout 180
+
+      - name: Run Python tool tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  sanitizers:
+    name: asan-ubsan
+    runs-on: macos-26
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      ASAN_OPTIONS: halt_on_error=1:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: arm64
+
+      - name: Install CMake and Ninja
+        run: python -m pip install 'cmake>=3.25,<4' ninja
+
+      - name: Build with ASan and UBSan
+        run: |
+          cores=$(sysctl -n hw.logicalcpu)
+          san_flags="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DTOKENIZERPP_BUILD_TESTS=ON \
+            -DTOKENIZERPP_BUILD_BENCHMARKS=OFF \
+            -DCMAKE_CXX_FLAGS="$san_flags" \
+            -DCMAKE_EXE_LINKER_FLAGS="$san_flags"
+          cmake --build build-asan --target tokenizerpp_tests --parallel "$cores"
+
+      - name: Run sanitized C++ unit tests
+        run: ./build-asan/tokenizerpp_tests

@@ -4,6 +4,7 @@
 
 #include "tokenizers/model.h"
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -20,7 +21,8 @@ public:
     WordPiece(std::unordered_map<std::string, TokenId> vocab,
               std::string unk_token = "[UNK]",
               std::string continuing_subword_prefix = "##",
-              size_t max_input_chars_per_word = 100);
+              size_t max_input_chars_per_word = 100,
+              bool fuse_unk = true);
 
     Result<std::vector<Token>> tokenize(std::string_view sequence) const override;
     std::optional<TokenId> token_to_id(std::string_view token) const override;
@@ -31,6 +33,7 @@ public:
     const std::string& get_unk_token() const { return unk_token_; }
     const std::string& get_continuing_subword_prefix() const { return continuing_subword_prefix_; }
     size_t get_max_input_chars_per_word() const { return max_input_chars_per_word_; }
+    bool get_fuse_unk() const { return fuse_unk_; }
 
 private:
     std::unordered_map<std::string, TokenId> vocab_;
@@ -38,6 +41,7 @@ private:
     std::string unk_token_ = "[UNK]";
     std::string continuing_subword_prefix_ = "##";
     size_t max_input_chars_per_word_ = 100;
+    bool fuse_unk_ = true;
 };
 
 /// Pair of token IDs used as merge key.

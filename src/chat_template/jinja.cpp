@@ -117,6 +117,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
                 tokens.push_back({TemplateTokenType::Text, std::string(src.substr(next)), false, false});
                 break;
             }
+            tokens.push_back({TemplateTokenType::Comment, {}, src[next + 2] == '-', end > next + 2 && src[end - 1] == '-'});
             pos = end + 2;
             continue;
         }
@@ -178,7 +179,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
     // indentation only when the block is the first non-whitespace item on its
     // source line; whitespace before an inline block remains literal output.
     for (size_t i = 0; i < tokens.size(); i++) {
-        if (tokens[i].type != TemplateTokenType::BlockExpr ||
+        if ((tokens[i].type != TemplateTokenType::BlockExpr && tokens[i].type != TemplateTokenType::Comment) ||
             tokens[i].trim_left || i == 0 ||
             tokens[i - 1].type != TemplateTokenType::Text) {
             continue;
@@ -195,7 +196,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
     }
 
     for (size_t i = 0; i < tokens.size(); i++) {
-        if (tokens[i].type == TemplateTokenType::BlockExpr &&
+        if ((tokens[i].type == TemplateTokenType::BlockExpr || tokens[i].type == TemplateTokenType::Comment) &&
             !tokens[i].trim_right && i + 1 < tokens.size() &&
             tokens[i + 1].type == TemplateTokenType::Text) {
             auto& text = tokens[i + 1].value;
@@ -207,6 +208,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
         }
     }
 
+    std::erase_if(tokens, [](const auto& token) { return token.type == TemplateTokenType::Comment; });
     return tokens;
 }
 

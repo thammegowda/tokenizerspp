@@ -80,6 +80,18 @@ tokenizer.save("output.json", true);  // pretty-printed
 auto json = tokenizer.to_string(false);
 ```
 
+### NLCodec Conversion
+
+Convert an NLCodec BPE model into a self-contained `tokenizer.json`:
+
+```bash
+python3 tools/nlcodec_to_tokenizer_json.py nlcodec.model tokenizer.json
+```
+
+The converter preserves token IDs, greedy segmentation, per-character unknown
+tokens, and duplicate token IDs. Output is compact UTF-8 by default; pass
+`--pretty` for indented JSON.
+
 ### Error Handling
 
 All fallible operations return `Result<T>` (alias for `std::expected<T, Error>`):
