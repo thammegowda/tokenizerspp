@@ -76,14 +76,14 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py' -v
 
   sanitizers:
-    name: asan-ubsan (linux-x64)
-    runs-on: ubuntu-24.04
+    name: asan-ubsan
+    runs-on: macos-26
     timeout-minutes: 25
     defaults:
       run:
         shell: bash
     env:
-      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      ASAN_OPTIONS: halt_on_error=1:strict_string_checks=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - name: Check out source
@@ -95,13 +95,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          architecture: arm64
 
       - name: Install CMake and Ninja
         run: python -m pip install 'cmake>=3.25,<4' ninja
 
       - name: Build with ASan and UBSan
         run: |
-          cores=$(nproc)
+          cores=$(sysctl -n hw.logicalcpu)
           san_flags="-fsanitize=address,undefined -fno-omit-frame-pointer"
           cmake -S . -B build-asan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
