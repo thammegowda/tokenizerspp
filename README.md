@@ -6,7 +6,7 @@ A pure C++23 rewrite of HuggingFace's [tokenizers](https://github.com/huggingfac
 
 - **1.9x faster encoding**, **2.3x faster decoding** than Rust ([benchmarks](benchmarks/results-2026-03-10.md))
 - **Exact token compatibility** — produces identical output to the Rust implementation
-- **2 MB binary** (stripped, vs 4.3 MB for Rust)
+- **< 1 MB binary** (`0.94 MiB` stripped, vs `4.3 MB` for Rust)
 - **Zero runtime dependencies** beyond the libc/libC++ standard libraries
 - Loads any HuggingFace `tokenizer.json` out of the box
 
@@ -178,8 +178,7 @@ These features exist in the Rust tokenizers library but are **not** in this C++ 
 | Library | Version | Purpose |
 |---------|---------|---------|
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.11.3 | JSON parsing |
-| [uni-algo](https://github.com/uni-algo/uni-algo) | 1.2.0 | Unicode normalization |
-| [RE2](https://github.com/google/re2) | 2024-07-02 | Regex (Unicode-aware) |
+| [uni-algo](https://github.com/uni-algo/uni-algo) | 1.2.0 | Unicode normalization, properties & scripts |
 
 All fetched automatically via CMake FetchContent.
 

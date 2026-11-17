@@ -10,6 +10,8 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(TOKENIZERPP_BUILD_TESTS "Build tests" ON)
@@ -32,40 +34,13 @@ FetchContent_Declare(
     GIT_TAG v1.2.0
 )
 FetchContent_MakeAvailable(uni_algo)
-
-# RE2 for regex (Unicode-aware via \p{L}, \p{N}, etc.; lighter than PCRE2)
-if(NOT TARGET re2::re2)
-    find_package(re2 QUIET CONFIG)
-    if(NOT re2_FOUND)
-        message(STATUS "RE2 not found on system, building from source")
-        if(NOT TARGET absl::strings)
-            FetchContent_Declare(
-                abseil-cpp
-                GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
-                GIT_TAG 20240722.0
-            )
-            set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
-            set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-            FetchContent_MakeAvailable(abseil-cpp)
-        endif()
-        FetchContent_Declare(
-            re2
-            GIT_REPOSITORY https://github.com/google/re2.git
-            GIT_TAG 2024-07-02
-        )
-        set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-        FetchContent_Populate(re2)
-        # Suppress RE2's install() rules: EXCLUDE_FROM_ALL prevents install,
-        # but RE2 still generates export() targets. Disable all install-related options.
-        set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-        set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-        set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
-        # Block RE2's install(EXPORT) by scoping with EXCLUDE_FROM_ALL and
-        # prevent the export set from being generated
-        set(CMAKE_SKIP_INSTALL_RULES ON)
-        add_subdirectory(${re2_SOURCE_DIR} ${re2_BINARY_DIR} EXCLUDE_FROM_ALL)
-        set(CMAKE_SKIP_INSTALL_RULES OFF)
-    endif()
+if(TARGET uni-algo)
+    target_compile_definitions(uni-algo PUBLIC
+        UNI_ALGO_DISABLE_COLLATE
+        UNI_ALGO_DISABLE_SEGMENT_GRAPHEME
+        UNI_ALGO_DISABLE_SEGMENT_WORD
+        UNI_ALGO_DISABLE_SYSTEM_LOCALE
+    )
 endif()
 
 # === Source files ===
@@ -149,9 +124,6 @@ target_link_libraries(tokenizerpp
     PRIVATE
         uni-algo::uni-algo
 )
-
-# Link RE2
-target_link_libraries(tokenizerpp PRIVATE re2::re2)
 
 # === Benchmarks ===
 if(TOKENIZERPP_BUILD_BENCHMARKS)
