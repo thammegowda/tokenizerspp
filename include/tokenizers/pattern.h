@@ -79,7 +79,7 @@ private:
     std::function<bool(char32_t)> pred_;
 };
 
-/// Pattern that matches using a regex (PCRE2, supports lookahead/lookbehind).
+/// Pattern that matches using a UTF-8 Unicode regex (supports \p{...} and lookaround).
 class RegexPattern : public Pattern {
 public:
     explicit RegexPattern(const std::string& pattern);
