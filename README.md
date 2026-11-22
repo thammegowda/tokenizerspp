@@ -5,10 +5,10 @@ A pure C++23 rewrite of HuggingFace's [tokenizers](https://github.com/huggingfac
 ## Highlights
 
 - **1.9x faster encoding**, **2.3x faster decoding** than Rust ([benchmarks](benchmarks/results-2026-03-10.md))
-- **Exact token compatibility** — produces identical output to the Rust implementation
+- **Hugging Face-compatible tokenization** — see [tested model coverage](#tested-model-coverage)
 - **< 1 MB binary** (`0.94 MiB` stripped, vs `4.3 MB` for Rust)
 - **Zero runtime dependencies** beyond the libc/libC++ standard libraries
-- Loads any HuggingFace `tokenizer.json` out of the box
+- Loads supported Hugging Face `tokenizer.json` files
 
 ## Quick Start
 
@@ -123,6 +123,21 @@ JSON output now preserves insertion order and uses spaces after commas/colons;
 request compact separators explicitly when required. Unsupported filters and
 calls return errors rather than silently passing through.
 
+#### Tested model coverage
+
+| Models | Coverage |
+|---|---|
+| [Inkling-2-Mini](tests/chat-templates/inkling2.jinja), [Qwen3.5](tests/chat-templates/qwen3_5.jinja) | Checked-in chat templates, including tool calls |
+| [Gemma 3](tests/chat-templates/gemma3.jinja), [Gemma 4](tests/chat-templates/gemma4.jinja), [TranslateGemma](tests/chat-templates/translate-gemma.jinja) | Checked-in chat templates |
+| Phi-3, Qwen2 | Inline chat-template tests in [test_chat_template.cpp](tests/test_chat_template.cpp) |
+| Llama 2, Mistral | Simplified chat-template patterns in [test_chat_template.cpp](tests/test_chat_template.cpp) |
+| GPT-2 | [Benchmark](benchmarks/results-2026-03-10.md) against Rust; compares token counts, not token IDs |
+
+The default test suite uses synthetic tokenizer vocabularies and the templates
+above; it does not include full pretrained `tokenizer.json` files or establish
+token-ID parity for these models. Template tests do not test model inference or
+tool execution.
+
 #### Reference parity
 
 Builds with tests enabled also provide `tokenizerpp_render_chat`. Compare local
@@ -137,7 +152,8 @@ python tools/check_chat_parity.py \
   --output /tmp/chat-parity.json
 ```
 
-Validated against Inkling-2-Mini revision
+Additional one-off template comparisons (not all fixtures are checked in) covered
+Inkling-2-Mini revision
 `b85c3cfa615fc413cc9af3379f491b963f3b586a` (vendored as
 `tests/chat-templates/inkling2.jinja`, Apache-2.0), Qwen3-8B, the Qwen3.5 and Gemma4
 fixtures, and the tool-capable Llama 3.1 template from
