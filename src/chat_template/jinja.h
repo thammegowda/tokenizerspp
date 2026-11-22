@@ -14,7 +14,7 @@
 
 namespace tokenizers::jinja {
 
-using json = nlohmann::json;
+using json = nlohmann::ordered_json;
 
 // ============================================================================
 // Template tokens (template-level lexer output)
@@ -80,7 +80,7 @@ enum class FilterId {
     Replace, Map, SelectAttr, Batch, Reverse,
     Sort, Reject, RejectAttr, Select, Abs,
     Round, Truncate, Indent, Capitalize,
-    Unique, DictSort, Items,
+    Unique, DictSort, Items, Safe,
     Unknown,
 };
 
@@ -155,6 +155,7 @@ using NodePtr = std::unique_ptr<Node>;
 enum class NodeType {
     Text,
     Output,   // {{ expr }}
+    Do,       // {% do expr %}, evaluated without output
     For,
     If,
     Set,

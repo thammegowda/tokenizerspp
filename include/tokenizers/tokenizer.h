@@ -15,11 +15,9 @@
 #include "tokenizers/tokenizer_config.h"
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include <nlohmann/json_fwd.hpp>
@@ -127,25 +125,33 @@ public:
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true,
         const std::string& template_name = "default",
-        const nlohmann::json& template_args = nlohmann::json::object()) const;
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
     [[nodiscard]] Result<std::string> apply_chat_template(
         const std::string& template_str,
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true,
-        const nlohmann::json& template_args = nlohmann::json::object()) const;
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
     /// Apply the chat template to pre-built JSON messages (e.g. structured
-    /// multimodal content with `content[]` parts). Uses the same template
-    /// cache as the flat-message overload.
+    /// multimodal content, tool calls/results, and reasoning).
     [[nodiscard]] Result<std::string> apply_chat_template_json(
-        const nlohmann::json& messages_json,
+        const nlohmann::ordered_json& messages_json,
         bool add_generation_prompt = true,
         const std::string& template_name = "default",
-        const nlohmann::json& template_args = nlohmann::json::object()) const;
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
     [[nodiscard]] Result<Encoding> encode_chat(
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = true,
         bool add_special_tokens = true,
-        const nlohmann::json& template_args = nlohmann::json::object()) const;
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
+
+    /// Encode structured chat without adding special tokens a second time.
+    /// Tool-call arguments are passed through unchanged: parse JSON-string
+    /// arguments into objects upstream when the model's template requires it.
+    [[nodiscard]] Result<Encoding> encode_chat_json(
+        const nlohmann::ordered_json& messages_json,
+        bool add_generation_prompt = true,
+        const std::string& template_name = "default",
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
 
 private:
     ModelPtr model_;
@@ -162,8 +168,6 @@ private:
     std::unique_ptr<AddedVocabulary> added_vocabulary_;
 
     std::optional<TokenizerConfig> config_;
-    mutable std::unordered_map<std::string, ChatTemplate> template_cache_;
-    mutable std::unique_ptr<std::mutex> template_cache_mutex_;  ///< protects lazy insertions into template_cache_
 
     // Internal encode helpers
     Result<Encoding> encode_single(std::string_view input, bool add_special_tokens) const;

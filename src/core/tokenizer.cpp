@@ -6,13 +6,11 @@
 
 namespace tokenizers {
 
-Tokenizer::Tokenizer()
-    : template_cache_mutex_(std::make_unique<std::mutex>()) {}
+Tokenizer::Tokenizer() = default;
 
 Tokenizer::Tokenizer(ModelPtr model)
     : model_(std::move(model)),
-      added_vocabulary_(std::make_unique<AddedVocabulary>()),
-      template_cache_mutex_(std::make_unique<std::mutex>()) {}
+      added_vocabulary_(std::make_unique<AddedVocabulary>()) {}
 
 Tokenizer::~Tokenizer() = default;
 Tokenizer::Tokenizer(Tokenizer&&) noexcept = default;
@@ -302,40 +300,8 @@ Result<std::vector<std::string>> Tokenizer::decode_batch(
 
 // ── Config & Chat Template ──────────────────────────────────────────────────
 
-// Sanitise a Jinja2 template string: apply compatibility patches for Gemma3,
-// Qwen3, and generation markers so the Jinja engine can handle them.
-static std::string sanitise_template(std::string tmpl) {
-    size_t pos;
-    while ((pos = tmpl.find("messages[0]['content'][0]['text']")) != std::string::npos)
-        tmpl.replace(pos, 32, "messages[0]['content']");
-    while ((pos = tmpl.find("[::-1]")) != std::string::npos)
-        tmpl.replace(pos, 6, "|reverse");
-    while ((pos = tmpl.find("{% generation %}")) != std::string::npos)
-        tmpl.erase(pos, 16);
-    while ((pos = tmpl.find("{% endgeneration %}")) != std::string::npos)
-        tmpl.erase(pos, 19);
-    return tmpl;
-}
-
 Tokenizer& Tokenizer::with_config(TokenizerConfig config) {
     config_ = std::move(config);
-    // Eagerly compile all chat templates so apply_chat_template() is a pure
-    // read path — safe to call concurrently from multiple threads without locks.
-    if (config_->has_chat_template()) {
-        auto compile = [&](const std::string& tmpl_str) {
-            if (tmpl_str.empty() || template_cache_.count(tmpl_str)) return;
-            try {
-                template_cache_.emplace(tmpl_str, ChatTemplate(
-                    sanitise_template(tmpl_str), config_->bos_token, config_->eos_token));
-            } catch (const std::exception&) {
-                // Fallback: lazy compilation on first apply
-            }
-        };
-        if (config_->default_chat_template)
-            compile(*config_->default_chat_template);
-        for (auto& [name, tmpl] : config_->named_chat_templates)
-            compile(tmpl);
-    }
     return *this;
 }
 
@@ -364,7 +330,7 @@ Result<std::string> Tokenizer::apply_chat_template(
     const std::vector<ChatMessage>& messages,
     bool add_generation_prompt,
     const std::string& template_name,
-    const nlohmann::json& template_args) const {
+    const nlohmann::ordered_json& template_args) const {
     auto tmpl_str = chat_template_str(template_name);
     if (tmpl_str.empty()) {
         return make_error("No chat template available");
@@ -376,70 +342,48 @@ Result<std::string> Tokenizer::apply_chat_template(
     const std::string& template_str,
     const std::vector<ChatMessage>& messages,
     bool add_generation_prompt,
-    const nlohmann::json& template_args) const {
-    // Fast path (lock-free): template was eagerly compiled in with_config()
-    auto it = template_cache_.find(template_str);
-    if (it == template_cache_.end()) {
-        // Slow path: compile on first use, synchronised across threads
-        std::lock_guard<std::mutex> lock(*template_cache_mutex_);
-        // Double-check after acquiring lock
-        it = template_cache_.find(template_str);
-        if (it == template_cache_.end()) {
-            std::optional<std::string> bos = config_ ? config_->bos_token : std::nullopt;
-            std::optional<std::string> eos = config_ ? config_->eos_token : std::nullopt;
-            try {
-                auto [inserted_it, _] = template_cache_.emplace(
-                    template_str, ChatTemplate(sanitise_template(template_str), bos, eos));
-                it = inserted_it;
-            } catch (const std::exception& e) {
-                return make_error(std::string("Chat template error: ") + e.what());
-            }
-        }
-    }
-
-    return it->second.apply(messages, add_generation_prompt, template_args);
+    const nlohmann::ordered_json& template_args) const {
+    ChatTemplate chat_template(template_str,
+                               config_ ? config_->bos_token : std::nullopt,
+                               config_ ? config_->eos_token : std::nullopt);
+    return chat_template.apply(messages, add_generation_prompt, template_args);
 }
 
 Result<std::string> Tokenizer::apply_chat_template_json(
-    const nlohmann::json& messages_json,
+    const nlohmann::ordered_json& messages_json,
     bool add_generation_prompt,
     const std::string& template_name,
-    const nlohmann::json& template_args) const {
+    const nlohmann::ordered_json& template_args) const {
     auto tmpl_str = chat_template_str(template_name);
     if (tmpl_str.empty()) {
         return make_error("No chat template available");
     }
 
-    // Reuse the same compiled-template cache as the flat-message overload.
-    auto it = template_cache_.find(tmpl_str);
-    if (it == template_cache_.end()) {
-        std::lock_guard<std::mutex> lock(*template_cache_mutex_);
-        it = template_cache_.find(tmpl_str);
-        if (it == template_cache_.end()) {
-            std::optional<std::string> bos = config_ ? config_->bos_token : std::nullopt;
-            std::optional<std::string> eos = config_ ? config_->eos_token : std::nullopt;
-            try {
-                auto [inserted_it, _] = template_cache_.emplace(
-                    tmpl_str, ChatTemplate(sanitise_template(tmpl_str), bos, eos));
-                it = inserted_it;
-            } catch (const std::exception& e) {
-                return make_error(std::string("Chat template error: ") + e.what());
-            }
-        }
-    }
-
-    return it->second.apply_json(messages_json, add_generation_prompt, template_args);
+    ChatTemplate chat_template(tmpl_str,
+                               config_ ? config_->bos_token : std::nullopt,
+                               config_ ? config_->eos_token : std::nullopt);
+    return chat_template.apply_json(messages_json, add_generation_prompt, template_args);
 }
 
 Result<Encoding> Tokenizer::encode_chat(
     const std::vector<ChatMessage>& messages,
     bool add_generation_prompt,
     bool add_special_tokens,
-    const nlohmann::json& template_args) const {
+    const nlohmann::ordered_json& template_args) const {
     auto formatted = apply_chat_template(messages, add_generation_prompt, "default",
                                          template_args);
     if (!formatted) return std::unexpected(formatted.error());
     return encode(*formatted, add_special_tokens);
+}
+
+Result<Encoding> Tokenizer::encode_chat_json(
+    const nlohmann::ordered_json& messages_json,
+    bool add_generation_prompt,
+    const std::string& template_name,
+    const nlohmann::ordered_json& template_args) const {
+    auto formatted = apply_chat_template_json(messages_json, add_generation_prompt, template_name, template_args);
+    if (!formatted) return std::unexpected(formatted.error());
+    return encode(*formatted, false);
 }
 
 } // namespace tokenizers

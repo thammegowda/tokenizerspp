@@ -8,6 +8,153 @@
 using namespace tokenizers;
 using json = nlohmann::json;
 
+TEST(AgenticTemplateTest, DelimitersInsideStringsAndAdjacentDictionaryBraces) {
+    ChatTemplate ct(
+        "{{ '}}<|end_message|>' }}|"
+        "{% set marker = '%}' %}{{ marker }}|"
+        "{{ {'outer':{'inner':1}}|tojson }}|"
+        "{{ \"escaped \\\"}}\\\"\" }}");
+    auto result = ct.apply({});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "}}<|end_message|>|%}|{\"outer\": {\"inner\": 1}}|escaped \"}}\"");
+}
+
+TEST(AgenticTemplateTest, GenerationBlocksPreserveCapturedOutputAndWhitespace) {
+    ChatTemplate ct(
+        "{%- set rendered -%}call{{ '}}' }}{%- endset -%}"
+        "{%- generation -%}{{- rendered -}}{%- endgeneration -%}");
+    auto result = ct.apply({});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "call}}");
+    auto invalid = ChatTemplate("{% generation %}unfinished").apply({});
+    ASSERT_FALSE(invalid);
+    EXPECT_NE(invalid.error().message().find("endgeneration"), std::string::npos);
+}
+
+TEST(AgenticTemplateTest, ToolListsAccumulateAcrossLoopScopes) {
+    ChatTemplate ct(
+        "{% set ns = namespace(specs=[]) %}"
+        "{% for tool in tools %}{% set ns.specs = ns.specs + [tool.name] %}{% endfor %}"
+        "{{ ns.specs|tojson(separators=(',', ':')) }}");
+    auto result = ct.apply({}, false, json{{"tools", json::array({{{"name", "search"}}, {{"name", "read"}}})}});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "[\"search\",\"read\"]");
+    auto invalid = ChatTemplate("{{ [] + 'oops' }}").apply({});
+    ASSERT_FALSE(invalid);
+}
+
+TEST(AgenticTemplateTest, ListMutationPersistsWithoutEmittingOutput) {
+    ChatTemplate ct(
+        "{% set ns = namespace(calls=[]) %}{% set calls = [] %}"
+        "{% for m in messages %}"
+        "{% do ns.calls.append(m.content) %}{% set ignored = calls.append(m.role) %}"
+        "{% endfor %}"
+        "{% do ns.calls.extend(['done']) %}"
+        "{{ ns.calls|tojson }}|{{ calls|tojson }}");
+    auto result = ct.apply({{"user", "hi"}, {"tool", "found"}});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "[\"hi\", \"found\", \"done\"]|[\"user\", \"tool\"]");
+    auto invalid = ChatTemplate("{% set x = [] %}{% do x.extend('oops') %}").apply({});
+    ASSERT_FALSE(invalid);
+}
+
+TEST(AgenticTemplateTest, JsonOrderingSeparatorsAndEscaping) {
+    ChatTemplate ct(
+        "{% set d = {'z': {'b': 1, 'a': 'x,:y'}, 'a': [true, none]} %}"
+        "{{ d|tojson }}|{{ d|tojson(sort_keys=true, separators=(',', ':')) }}|"
+        "{{ label|tojson(ensure_ascii=true) }}|{{ '<>&'|tojson }}");
+    auto result = ct.apply({}, false, json{{"label", "\xC3\xA9"}});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result,
+        "{\"z\": {\"b\": 1, \"a\": \"x,:y\"}, \"a\": [true, null]}|"
+        "{\"a\":[true,null],\"z\":{\"a\":\"x,:y\",\"b\":1}}|\"\\u00e9\"|\"<>&\"");
+    auto pretty = ChatTemplate("{{ {'a':[1,2]}|tojson(indent=2) }}").apply({});
+    ASSERT_TRUE(pretty) << pretty.error().message();
+    EXPECT_EQ(*pretty, "{\n  \"a\": [\n    1,\n    2\n  ]\n}");
+    auto invalid = ChatTemplate("{{ {}|tojson(separators='bad') }}").apply({});
+    ASSERT_FALSE(invalid);
+}
+
+TEST(AgenticTemplateTest, DictSortKeywordsAndStableCaseInsensitiveTies) {
+    ChatTemplate ct(
+        "{% set d = {'b': 2, 'B': 3, 'a': 1} %}"
+        "{% for k, v in d|dictsort(case_sensitive=true) %}{{ k }}{% endfor %}|"
+        "{% for k, v in d|dictsort %}{{ k }}{% endfor %}|"
+        "{% for k, v in d|dictsort(by='value', reverse=true) %}{{ k }}{% endfor %}");
+    auto result = ct.apply({});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "Bab|abB|Bba");
+}
+
+TEST(AgenticTemplateTest, DictionaryEqualityIgnoresInsertionOrderRecursively) {
+    ChatTemplate ct(
+        "{{ {'b':2,'a':{'y':3,'x':4}} == {'a':{'x':4,'y':3},'b':2} }}|"
+        "{{ {'a':1,'b':2} in [{'b':2,'a':1}] }}|"
+        "{{ {'a':1,'b':2} != {'b':2,'a':1,'c':3} }}|"
+        "{{ [{'a':1,'b':2}] == [{'a':1,'b':3}] }}");
+    auto result = ct.apply({});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "True|True|True|False");
+}
+
+TEST(AgenticTemplateTest, MappedFiltersUseNormalDispatchAndRejectUnknownFilters) {
+    ChatTemplate ct(
+        "{{ [{'z':1,'a':2}]|map('tojson', sort_keys=true, separators=(',', ':'))|first }}");
+    auto result = ct.apply({});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "{\"a\":2,\"z\":1}");
+
+    auto invalid = ChatTemplate("{{ ['hello']|map('unknown_filter')|first }}").apply({});
+    ASSERT_FALSE(invalid);
+    EXPECT_NE(invalid.error().message().find("unknown_filter"), std::string::npos);
+}
+
+TEST(AgenticTemplateTest, StructuredToolResultsRetainCallerOrder) {
+    ChatTemplate ct(
+        "{% for m in messages %}"
+        "{{ m.role }}:"
+        "{% if m.tool_calls %}{{ m.tool_calls[0].function.arguments|tojson }}{% endif %}"
+        "{% if m.tool_call_id %}{{ m.tool_call_id }}{% endif %}"
+        "{% if m.reasoning_content %}{{ m.reasoning_content }}{% endif %};"
+        "{% endfor %}");
+    auto messages = nlohmann::ordered_json::parse(R"([
+        {"role":"assistant","content":null,"reasoning_content":"plan",
+         "tool_calls":[{"id":"c1","function":{"name":"search","arguments":{"z":1,"a":2}}}]},
+        {"role":"tool","tool_call_id":"c1","content":"found"}
+    ])");
+    auto result = ct.apply_json(messages);
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "assistant:{\"z\": 1, \"a\": 2}plan;tool:c1;");
+}
+
+TEST(AgenticTemplateTest, NullableContentAndUndefinedStringConversionsMatchJinja) {
+    auto result = ChatTemplate("{{ none|trim }}|{{ none|string }}|{{ missing~'x' }}").apply({});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "None|None|x");
+}
+
+TEST(AgenticTemplateTest, NumericReasoningEffortRetainsPrecision) {
+    auto result = ChatTemplate("{{ reasoning_effort }}|{{ 1.0 }}").apply(
+        {}, false, {{"reasoning_effort", 0.123456789}});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "0.123456789|1.0");
+}
+
+TEST(AgenticTemplateTest, InvalidOperationsReturnErrorsInsteadOfSilentlyPassingThrough) {
+    for (const auto* source : {
+            "{{ 'x'|missing_filter }}", "{{ missing_function() }}",
+            "{{ 'x'.missing_method() }}", "{{ 'unterminated }}", "{{ 1 trailing }}",
+            "{{ 'not a mapping'|items }}",
+            "{% set x = [] %}{% do x.append() %}"}) {
+        auto result = ChatTemplate(source).apply({});
+        EXPECT_FALSE(result) << source;
+    }
+    for (const auto& messages : {json::object(), json::array({1}),
+                                json::array({{{"role", 42}}})}) {
+        EXPECT_FALSE(ChatTemplate("ok").apply_json(messages));
+    }
+}
+
 // ============================================================================
 // Basic functionality
 // ============================================================================
@@ -995,6 +1142,8 @@ const std::string GEMMA3_TEMPLATE = read_file(test_dir() + "/chat-templates/gemm
 const std::string TRANSLATE_GEMMA_TEMPLATE = read_file(test_dir() + "/chat-templates/translate-gemma.jinja");
 const std::string GEMMA4_TEMPLATE = read_file(test_dir() + "/chat-templates/gemma4.jinja");
 const std::string QWEN35_TEMPLATE = read_file(test_dir() + "/chat-templates/qwen3_5.jinja");
+// thinkingmachines/Inkling-2-Mini @ b85c3cfa615fc413cc9af3379f491b963f3b586a (Apache-2.0).
+const std::string INKLING2_TEMPLATE = read_file(test_dir() + "/chat-templates/inkling2.jinja");
 
 
 } // anonymous namespace
@@ -1521,4 +1670,82 @@ TEST(Qwen35ChatTest, EnableThinkingControlsTheThinkBlock) {
     EXPECT_NE(off->find("<think>\n\n</think>"), std::string::npos)
         << "expected a pre-closed think block, got: " << *off;
     EXPECT_NE(*off, *on);
+}
+
+TEST(Qwen35ChatTest, ParallelToolRoundTripWithReasoningAndNestedArguments) {
+    ChatTemplate ct(QWEN35_TEMPLATE);
+    auto messages = nlohmann::ordered_json::parse(R"([
+        {"role":"user","content":"Look up the weather."},
+        {"role":"assistant","content":null,"reasoning_content":"Check both cities.",
+         "tool_calls":[
+            {"function":{"name":"weather","arguments":{"city":"Paris","options":{"units":"C"}}}},
+            {"function":{"name":"weather","arguments":{"city":"Tokyo","days":[1,2]}}}
+         ]},
+        {"role":"tool","content":"Paris: 20C"},
+        {"role":"tool","content":"Tokyo: 25C"}
+    ])");
+    auto result = ct.apply_json(messages, true, {{"enable_thinking", false}});
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_NE(result->find("<think>\nCheck both cities.\n</think>"), std::string::npos);
+    EXPECT_NE(result->find("<parameter=options>\n{\"units\": \"C\"}\n</parameter>"), std::string::npos);
+    EXPECT_NE(result->find("<parameter=days>\n[1, 2]\n</parameter>"), std::string::npos);
+    EXPECT_NE(result->find("<tool_response>\nParis: 20C\n</tool_response>\n"
+                           "<tool_response>\nTokyo: 25C\n</tool_response>"), std::string::npos);
+    EXPECT_TRUE(result->ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+}
+
+namespace {
+
+const nlohmann::ordered_json INKLING2_TOOLS = nlohmann::ordered_json::parse(R"([
+    {"type":"function","function":{"name":"weather","description":"Get weather",
+     "parameters":{"type":"object","properties":{"city":{"type":"string"},"options":{"type":"object"}},
+                   "required":["city"]}}}
+])");
+
+} // anonymous namespace
+
+// Expected output was rendered by Hugging Face Transformers' Jinja environment.
+TEST(Inkling2ChatTest, ParallelToolRoundTripMatchesReference) {
+    ASSERT_FALSE(INKLING2_TEMPLATE.empty()) << "Failed to read inkling2.jinja";
+    ChatTemplate ct(INKLING2_TEMPLATE, std::nullopt, "<|content_model_end_sampling|>");
+    auto messages = nlohmann::ordered_json::parse(R"([
+        {"role":"system","content":"Be brief."},
+        {"role":"user","content":"Weather in Paris and Tokyo?"},
+        {"role":"assistant","content":null,"reasoning_content":"Check both cities.","tool_calls":[
+            {"id":"c1","type":"function","function":{"name":"weather",
+             "arguments":{"city":"Paris","options":{"z":1,"a":"x,:y"}}}},
+            {"id":"c2","type":"function","function":{"name":"weather","arguments":{"city":"Tokyo"}}}]},
+        {"role":"tool","tool_call_id":"c1","name":"weather","content":"20 C"},
+        {"role":"tool","tool_call_id":"c2","name":"weather","content":"25 C"}
+    ])");
+    nlohmann::ordered_json args = {{"tools", INKLING2_TOOLS}, {"reasoning_effort", "low"}};
+    auto result = ct.apply_json(messages, true, args);
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result,
+        "<|message_system|>tool_declare<|content_xml|>[{\"description\":\"Get weather\",\"name\":\"weather\","
+        "\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"},\"options\":{\"type\":\"object\"}},"
+        "\"required\":[\"city\"],\"type\":\"object\"},\"type\":\"function\"}]<|end_message|>"
+        "<|message_system|><|content_text|>Be brief.<|end_message|>"
+        "<|message_system|><|content_text|>Thinking effort level: 0.2<|end_message|>"
+        "<|message_user|><|content_text|>Weather in Paris and Tokyo?<|end_message|>"
+        "<|message_model|><|content_thinking|>Check both cities.<|end_message|>"
+        "<|message_model|>weather<|content_invoke_tool_json|>"
+        "{\"name\":\"weather\",\"args\":{\"city\":\"Paris\",\"options\":{\"z\":1,\"a\":\"x,:y\"}}}<|end_message|>"
+        "<|message_model|>weather<|content_invoke_tool_json|>"
+        "{\"name\":\"weather\",\"args\":{\"city\":\"Tokyo\"}}<|end_message|>"
+        "<|content_model_end_sampling|>"
+        "<|message_tool|>weather<|content_text|>20 C<|end_message|>"
+        "<|message_tool|>weather<|content_text|>25 C<|end_message|>");
+}
+
+TEST(Inkling2ChatTest, StringToolArgumentsAreRejected) {
+    ChatTemplate ct(INKLING2_TEMPLATE, std::nullopt, "<|content_model_end_sampling|>");
+    auto messages = nlohmann::ordered_json::parse(R"([
+        {"role":"user","content":"Weather in Paris?"},
+        {"role":"assistant","content":null,"tool_calls":[
+            {"id":"c1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Paris\"}"}}]}
+    ])");
+    auto result = ct.apply_json(messages, false, {{"tools", INKLING2_TOOLS}});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().message().find("must be a parsed object"), std::string::npos);
 }

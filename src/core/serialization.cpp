@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -637,33 +638,42 @@ Result<Tokenizer> Tokenizer::from_file(const std::string& path) {
     auto tok = from_string(ss.str());
     if (!tok) return tok;
 
-    // Try loading sibling tokenizer_config.json
-    auto slash = path.rfind('/');
-    if (slash != std::string::npos) {
-        auto dir = path.substr(0, slash);
-        auto config = TokenizerConfig::from_file(dir + "/tokenizer_config.json");
-        if (config) {
-            tok->with_config(std::move(*config));
-        }
+    const auto dir = std::filesystem::path(path).parent_path();
+    const auto config_path = dir / "tokenizer_config.json";
+    const auto template_path = dir / "chat_template.jinja";
+    TokenizerConfig config;
+    bool has_config = false;
+    std::error_code error;
+    const bool config_exists = std::filesystem::exists(config_path, error);
+    if (error) return make_error("Cannot inspect tokenizer config: " + error.message());
+    if (config_exists) {
+        auto loaded = TokenizerConfig::from_file(config_path.string());
+        if (!loaded) return std::unexpected(loaded.error());
+        config = std::move(*loaded);
+        has_config = true;
     }
+    const bool template_exists = std::filesystem::exists(template_path, error);
+    if (error) return make_error("Cannot inspect chat template: " + error.message());
+    if (template_exists) {
+        if (!std::filesystem::is_regular_file(template_path, error)) {
+            if (error) return make_error("Cannot inspect chat template: " + error.message());
+            return make_error("Chat template is not a regular file: " + template_path.string());
+        }
+        std::ifstream source(template_path, std::ios::binary);
+        if (!source) return make_error("Cannot open chat template: " + template_path.string());
+        std::ostringstream contents;
+        contents << source.rdbuf();
+        if (source.bad()) return make_error("Cannot read chat template: " + template_path.string());
+        config.default_chat_template = contents.str();
+        has_config = true;
+    }
+    if (has_config) tok->with_config(std::move(config));
 
     return tok;
 }
 
 Result<Tokenizer> Tokenizer::from_directory(const std::string& dir) {
-    auto tok = from_file(dir + "/tokenizer.json");
-    if (!tok) return tok;
-
-    // If from_file didn't already load the config (e.g. dir has no slash),
-    // try explicitly
-    if (!tok->get_config()) {
-        auto config = TokenizerConfig::from_file(dir + "/tokenizer_config.json");
-        if (config) {
-            tok->with_config(std::move(*config));
-        }
-    }
-
-    return tok;
+    return from_file((std::filesystem::path(dir) / "tokenizer.json").string());
 }
 
 // ── Serialization helpers ────────────────────────────────────────────────────

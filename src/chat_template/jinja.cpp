@@ -80,6 +80,7 @@ FilterId string_to_filter_id(const std::string& s) {
         {"unique",     FilterId::Unique},
         {"dictsort",   FilterId::DictSort},
         {"items",      FilterId::Items},
+        {"safe",       FilterId::Safe},
     };
     auto it = map.find(s);
     if (it != map.end()) return it->second;
@@ -89,6 +90,27 @@ FilterId string_to_filter_id(const std::string& s) {
 // ════════════════════════════════════════════════════════
 // Section 1: Template Lexer
 // ════════════════════════════════════════════════════════
+
+static size_t find_tag_end(std::string_view src, size_t start, std::string_view delimiter) {
+    char quote = 0;
+    int depth = 0;
+    for (size_t i = start; i < src.size(); ++i) {
+        const char c = src[i];
+        if (quote) {
+            if (c == '\\') ++i;
+            else if (c == quote) quote = 0;
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+        } else if (depth == 0 && src.substr(i, delimiter.size()) == delimiter) {
+            return i;
+        } else if (c == '(' || c == '[' || c == '{') {
+            ++depth;
+        } else if (c == ')' || c == ']' || c == '}') {
+            --depth;
+        }
+    }
+    throw std::runtime_error("Unterminated template tag");
+}
 
 std::vector<TemplateToken> tokenize_template(std::string_view src) {
     std::vector<TemplateToken> tokens;
@@ -125,7 +147,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
         if (next == var_pos && var_pos != std::string_view::npos) {
             bool trim_left = (next + 2 < src.size() && src[next + 2] == '-');
             size_t expr_start = next + 2 + (trim_left ? 1 : 0);
-            size_t end = src.find("}}", expr_start);
+            size_t end = find_tag_end(src, expr_start, "}}");
             if (end == std::string_view::npos) {
                 tokens.push_back({TemplateTokenType::Text, std::string(src.substr(next)), false, false});
                 break;
@@ -138,7 +160,7 @@ std::vector<TemplateToken> tokenize_template(std::string_view src) {
         } else {
             bool trim_left = (next + 2 < src.size() && src[next + 2] == '-');
             size_t stmt_start = next + 2 + (trim_left ? 1 : 0);
-            size_t end = src.find("%}", stmt_start);
+            size_t end = find_tag_end(src, stmt_start, "%}");
             if (end == std::string_view::npos) {
                 tokens.push_back({TemplateTokenType::Text, std::string(src.substr(next)), false, false});
                 break;
@@ -257,6 +279,7 @@ std::vector<Token> lex_expression(std::string_view src) {
                     switch (src[pos]) {
                     case 'n':  s += '\n'; break;
                     case 't':  s += '\t'; break;
+                    case 'r':  s += '\r'; break;
                     case '\\': s += '\\'; break;
                     case '\'': s += '\''; break;
                     case '"':  s += '"';  break;
@@ -267,7 +290,8 @@ std::vector<Token> lex_expression(std::string_view src) {
                 }
                 pos++;
             }
-            if (pos < src.size()) pos++; // closing quote
+            if (pos == src.size()) throw std::runtime_error("Unterminated string literal");
+            pos++; // closing quote
             tokens.push_back({TokenKind::String, s, json(s)});
             continue;
         }
@@ -761,6 +785,21 @@ struct TemplateParser {
                 return parse_macro();
             } else if (starts_with_keyword(trimmed, "set")) {
                 return parse_set();
+            } else if (trimmed == "generation") {
+                pos++;
+                auto node = std::make_unique<Node>();
+                node->type = NodeType::Block;
+                node->body = parse_body({"endgeneration"});
+                if (at_end() || trim(current().value) != "endgeneration")
+                    throw std::runtime_error("Missing endgeneration");
+                pos++;
+                return node;
+            } else if (starts_with_keyword(trimmed, "do")) {
+                pos++;
+                auto node = std::make_unique<Node>();
+                node->type = NodeType::Do;
+                node->expr = parse_expression(trimmed.substr(2));
+                return node;
             } else {
                 throw std::runtime_error("Unknown block tag: " + trimmed);
             }
@@ -930,15 +969,12 @@ bool is_undefined(const json& val) {
 }
 
 std::string json_to_string(const json& val) {
+    if (is_undefined(val)) return "";
     if (val.is_string()) return val.get<std::string>();
-    if (val.is_null()) return "";
+    if (val.is_null()) return "None";
     if (val.is_boolean()) return val.get<bool>() ? "True" : "False";
     if (val.is_number_integer()) return std::to_string(val.get<int64_t>());
-    if (val.is_number_float()) {
-        std::ostringstream oss;
-        oss << val.get<double>();
-        return oss.str();
-    }
+    if (val.is_number_float()) return val.dump();
     return val.dump();
 }
 
@@ -1115,8 +1151,58 @@ json to_string(const json& value, const std::vector<json>& /*args*/) {
     return json_to_string(value);
 }
 
-json tojson(const json& value, const std::vector<json>& /*args*/) {
-    return value.dump();
+json tojson(const json& value, const std::vector<json>& args, const KwargsVec& kwargs = {}) {
+    json options = {
+        {"ensure_ascii", false}, {"sort_keys", false}, {"indent", nullptr},
+        {"separators", json::array({", ", ": "})},
+    };
+    if (args.size() > 1) throw std::runtime_error("tojson accepts at most one positional argument");
+    if (!args.empty()) options["indent"] = args[0];
+    bool explicit_separators = false;
+    for (const auto& [key, val] : kwargs) {
+        if (!options.contains(key)) throw std::runtime_error("Unknown tojson argument: " + key);
+        options[key] = val;
+        if (key == "separators") explicit_separators = true;
+    }
+    if (!options["ensure_ascii"].is_boolean() || !options["sort_keys"].is_boolean())
+        throw std::runtime_error("tojson ensure_ascii and sort_keys must be booleans");
+    const auto& separators = options["separators"];
+    if (!separators.is_array() || separators.size() != 2 ||
+        !separators[0].is_string() || !separators[1].is_string())
+        throw std::runtime_error("tojson separators must be a pair of strings");
+    int indent = -1;
+    if (!options["indent"].is_null()) {
+        if (!options["indent"].is_number_integer())
+            throw std::runtime_error("tojson indent must be an integer");
+        indent = std::max(0, options["indent"].get<int>());
+        if (!explicit_separators) options["separators"][0] = ",";
+    }
+    const bool ascii = options["ensure_ascii"].get<bool>();
+    const bool sorted = options["sort_keys"].get<bool>();
+    const auto item_sep = options["separators"][0].get<std::string>();
+    const auto key_sep = options["separators"][1].get<std::string>();
+    std::function<std::string(const json&, int)> serialize = [&](const json& val, int depth) {
+        if (!val.is_object() && !val.is_array()) return val.dump(-1, ' ', ascii);
+        const bool object = val.is_object();
+        std::string out = object ? "{" : "[";
+        std::vector<std::string> keys;
+        if (object) {
+            for (const auto& [key, unused] : val.items()) keys.push_back(key);
+            if (sorted) std::sort(keys.begin(), keys.end());
+        }
+        for (size_t i = 0; i < val.size(); ++i) {
+            if (i) out += item_sep;
+            if (indent >= 0) out += "\n" + std::string((depth + 1) * indent, ' ');
+            if (object)
+                out += json(keys[i]).dump(-1, ' ', ascii) + key_sep + serialize(val[keys[i]], depth + 1);
+            else
+                out += serialize(val[i], depth + 1);
+        }
+        if (indent >= 0 && !val.empty()) out += "\n" + std::string(depth * indent, ' ');
+        out += object ? "}" : "]";
+        return out;
+    };
+    return serialize(value, 0);
 }
 
 json replace(const json& value, const std::vector<json>& args) {
@@ -1158,11 +1244,22 @@ json reverse(const json& value, const std::vector<json>& /*args*/) {
     return value;
 }
 
-json dictsort(const json& value, const std::vector<json>& args) {
+json dictsort(const json& value, const std::vector<json>& args, const KwargsVec& kwargs = {}) {
     // Sort a mapping by key, returning a list of [key, value] pairs.
     // Like Jinja, keys compare case-insensitively unless the first argument
     // (case_sensitive) is true.
     bool case_sensitive = !args.empty() && is_truthy(args[0]);
+    std::string by = args.size() > 1 ? json_to_string(args[1]) : "key";
+    bool reverse = args.size() > 2 && is_truthy(args[2]);
+    if (args.size() > 3) throw std::runtime_error("dictsort accepts at most three arguments");
+    for (const auto& [key, val] : kwargs) {
+        if (key == "case_sensitive") case_sensitive = is_truthy(val);
+        else if (key == "by") by = json_to_string(val);
+        else if (key == "reverse") reverse = is_truthy(val);
+        else throw std::runtime_error("Unknown dictsort argument: " + key);
+    }
+    if (by != "key" && by != "value") throw std::runtime_error("dictsort by must be 'key' or 'value'");
+    if (!value.is_object()) throw std::runtime_error("dictsort requires a mapping");
     auto fold = [](const std::string& s) {
         std::string out;
         out.reserve(s.size());
@@ -1174,12 +1271,15 @@ json dictsort(const json& value, const std::vector<json>& args) {
         std::vector<std::string> keys;
         keys.reserve(value.size());
         for (auto& [k, v] : value.items()) keys.push_back(k);
-        std::sort(keys.begin(), keys.end(),
+        std::stable_sort(keys.begin(), keys.end(),
                   [&](const std::string& a, const std::string& b) {
-                      if (case_sensitive) return a < b;
-                      const auto fa = fold(a), fb = fold(b);
-                      // Raw keys break ties so the order stays deterministic.
-                      return fa != fb ? fa < fb : a < b;
+                      json va = by == "key" ? json(a) : value[a];
+                      json vb = by == "key" ? json(b) : value[b];
+                      if (!case_sensitive) {
+                          if (va.is_string()) va = fold(va.get<std::string>());
+                          if (vb.is_string()) vb = fold(vb.get<std::string>());
+                      }
+                      return reverse ? vb < va : va < vb;
                   });
         for (const auto& k : keys) arr.push_back(json::array({k, value[k]}));
     }
@@ -1189,6 +1289,8 @@ json dictsort(const json& value, const std::vector<json>& args) {
 json items(const json& value, const std::vector<json>& /*args*/) {
     // Mapping -> list of [key, value] pairs (insertion order).
     json arr = json::array();
+    if (!value.is_object() && !is_undefined(value))
+        throw std::runtime_error("Can only get item pairs from a mapping.");
     if (value.is_object())
         for (auto& [k, v] : value.items()) arr.push_back(json::array({k, v}));
     return arr;
@@ -1372,13 +1474,39 @@ static const std::unordered_map<FilterId, FilterFn> SIMPLE_FILTERS = {
     {FilterId::Int,     filters::to_int},
     {FilterId::Float,   filters::to_float},
     {FilterId::String,  filters::to_string},
-    {FilterId::ToJson,  filters::tojson},
     {FilterId::Replace, filters::replace},
     {FilterId::Batch,   filters::batch},
     {FilterId::Reverse, filters::reverse},
-    {FilterId::DictSort, filters::dictsort},
     {FilterId::Items,   filters::items},
+    {FilterId::Safe,    [](const auto& val, const auto&) { return val; }},
 };
+
+static json apply_filter(FilterId filter, const std::string& name, const json& value,
+                         const std::vector<json>& args, const KwargsVec& kwargs) {
+    if (filter == FilterId::ToJson) return filters::tojson(value, args, kwargs);
+    if (filter == FilterId::DictSort) return filters::dictsort(value, args, kwargs);
+    if (auto it = SIMPLE_FILTERS.find(filter); it != SIMPLE_FILTERS.end())
+        return it->second(value, args);
+    throw std::runtime_error("Unsupported template filter: " + name);
+}
+
+static bool json_equal(const json& lhs, const json& rhs) {
+    if (lhs.is_object() && rhs.is_object()) {
+        if (lhs.size() != rhs.size()) return false;
+        for (const auto& [key, value] : lhs.items()) {
+            auto it = rhs.find(key);
+            if (it == rhs.end() || !json_equal(value, *it)) return false;
+        }
+        return true;
+    }
+    if (lhs.is_array() && rhs.is_array()) {
+        if (lhs.size() != rhs.size()) return false;
+        for (size_t i = 0; i < lhs.size(); ++i)
+            if (!json_equal(lhs[i], rhs[i])) return false;
+        return true;
+    }
+    return lhs == rhs;
+}
 
 using StrMethodFn = std::function<json(const std::string&, const std::vector<json>&)>;
 
@@ -1450,6 +1578,28 @@ struct Evaluator {
                 return (*scope)[name];
         }
         return UNDEFINED;
+    }
+
+    json* mutable_value(const ExprNode& node) {
+        if (auto* ident = std::get_if<IdentExpr>(&node)) {
+            for (auto it = scope_stack.rbegin(); it != scope_stack.rend(); ++it)
+                if ((*it)->contains(ident->name)) return &(**it)[ident->name];
+        } else if (auto* attr = std::get_if<GetAttrExpr>(&node)) {
+            auto* obj = mutable_value(*attr->object);
+            if (obj && obj->is_object() && obj->contains(attr->attr)) return &(*obj)[attr->attr];
+        } else if (auto* item = std::get_if<GetItemExpr>(&node)) {
+            auto key = eval(*item->key);
+            auto* obj = mutable_value(*item->object);
+            if (obj && obj->is_object() && key.is_string() && obj->contains(key.get<std::string>()))
+                return &(*obj)[key.get<std::string>()];
+            if (obj && obj->is_array() && key.is_number_integer()) {
+                auto index = key.get<int64_t>();
+                if (index < 0) index += static_cast<int64_t>(obj->size());
+                if (index >= 0 && index < static_cast<int64_t>(obj->size()))
+                    return &(*obj)[static_cast<size_t>(index)];
+            }
+        }
+        return nullptr;
     }
 
     void set_var(const std::string& name, const json& value) {
@@ -1614,7 +1764,7 @@ struct Evaluator {
     static bool contains(const json& haystack, const json& needle) {
         if (haystack.is_array()) {
             for (const auto& item : haystack)
-                if (item == needle) return true;
+                if (json_equal(item, needle)) return true;
             return false;
         }
         if (haystack.is_string() && needle.is_string())
@@ -1643,8 +1793,8 @@ struct Evaluator {
 
         switch (e.op) {
             // Comparison
-            case BinOp::Eq:    return json(left == right);
-            case BinOp::NotEq: return json(left != right);
+            case BinOp::Eq:    return json(json_equal(left, right));
+            case BinOp::NotEq: return json(!json_equal(left, right));
             case BinOp::Lt:    return json(left < right);
             case BinOp::Gt:    return json(left > right);
             case BinOp::LtEq:  return json(left <= right);
@@ -1660,6 +1810,10 @@ struct Evaluator {
 
             // Arithmetic
             case BinOp::Add:
+                if (left.is_array() && right.is_array()) {
+                    for (const auto& item : right) left.push_back(item);
+                    return left;
+                }
                 if (left.is_string() && right.is_string())
                     return left.get<std::string>() + right.get<std::string>();
                 if (left.is_number() && right.is_number()) {
@@ -1667,7 +1821,7 @@ struct Evaluator {
                         return left.get<double>() + right.get<double>();
                     return left.get<int64_t>() + right.get<int64_t>();
                 }
-                return json_to_string(left) + json_to_string(right);
+                throw std::runtime_error("Unsupported operand types for +");
 
             case BinOp::Sub:
                 if (left.is_number() && right.is_number()) {
@@ -1745,6 +1899,19 @@ struct Evaluator {
 
         // Method call: obj.method(args)
         if (auto* ga = std::get_if<GetAttrExpr>(e.callee.get())) {
+            if (ga->attr == "append" || ga->attr == "extend") {
+                if (args.size() != 1 || !kwargs.empty())
+                    throw std::runtime_error(ga->attr + " requires one positional argument");
+                if (auto* target = mutable_value(*ga->object); target && target->is_array()) {
+                    if (ga->attr == "append") target->push_back(args[0]);
+                    else {
+                        if (!args[0].is_array()) throw std::runtime_error("extend requires a list");
+                        for (const auto& item : args[0]) target->push_back(item);
+                    }
+                    return nullptr;
+                }
+                throw std::runtime_error(ga->attr + " requires a mutable list");
+            }
             auto obj = eval(*ga->object);
 
             if (obj.is_string()) {
@@ -1760,7 +1927,7 @@ struct Evaluator {
             }
         }
 
-        return UNDEFINED;
+        throw std::runtime_error("Unsupported template function or method");
     }
 
     // ---- Filters — simple filters from map, complex filters inline ----
@@ -1768,17 +1935,9 @@ struct Evaluator {
     json eval_filter(const FilterExpr& e) {
         auto val = eval(*e.value);
         auto args = eval_args(e.args);
-
-        // Simple filters — dispatched from the SIMPLE_FILTERS map
-        auto it = SIMPLE_FILTERS.find(e.filter);
-        if (it != SIMPLE_FILTERS.end())
-            return it->second(val, args);
-
-        // Complex filters that need kwargs or special handling
-        switch (e.filter) {
-        case FilterId::Map: {
+        auto kwargs = eval_kwargs(e.kwargs);
+        if (e.filter == FilterId::Map) {
             if (val.is_array()) {
-                auto kwargs = eval_kwargs(e.kwargs);
                 std::string attr;
                 for (const auto& [k, v] : kwargs) {
                     if (k == "attribute") attr = json_to_string(v);
@@ -1796,22 +1955,18 @@ struct Evaluator {
                 }
                 if (!args.empty()) {
                     // map('filter_name', extra_args...) — apply a filter to each item.
-                    FilterId fid = string_to_filter_id(json_to_string(args[0]));
+                    const auto filter_name = json_to_string(args[0]);
+                    FilterId fid = string_to_filter_id(filter_name);
                     std::vector<json> fargs(args.begin() + 1, args.end());
-                    auto fit = SIMPLE_FILTERS.find(fid);
                     json arr = json::array();
-                    for (const auto& item : val) {
-                        if (fit != SIMPLE_FILTERS.end())
-                            arr.push_back(fit->second(item, fargs));
-                        else
-                            arr.push_back(item);
-                    }
+                    for (const auto& item : val)
+                        arr.push_back(apply_filter(fid, filter_name, item, fargs, kwargs));
                     return arr;
                 }
             }
             return val;
         }
-        case FilterId::SelectAttr: {
+        if (e.filter == FilterId::SelectAttr) {
             if (val.is_array() && !args.empty()) {
                 auto attr = json_to_string(args[0]);
                 json arr = json::array();
@@ -1820,9 +1975,11 @@ struct Evaluator {
                     auto test_val = args[2];
                     for (const auto& item : val) {
                         if (!item.is_object() || !item.contains(attr)) continue;
-                        if ((test == "equalto" || test == "eq" || test == "==") && item[attr] == test_val)
+                        if ((test == "equalto" || test == "eq" || test == "==") &&
+                            json_equal(item[attr], test_val))
                             arr.push_back(item);
-                        else if ((test == "ne" || test == "!=") && item[attr] != test_val)
+                        else if ((test == "ne" || test == "!=") &&
+                                 !json_equal(item[attr], test_val))
                             arr.push_back(item);
                     }
                 } else {
@@ -1835,9 +1992,7 @@ struct Evaluator {
             }
             return val;
         }
-        default:
-            return val;  // Unimplemented filters pass through
-        }
+        return apply_filter(e.filter, e.name, val, args, kwargs);
     }
 
     // ---- Macro invocation — renders the macro body into a string ----
@@ -1904,6 +2059,10 @@ struct Evaluator {
                 output += json_to_string(val);
             break;
         }
+
+        case NodeType::Do:
+            eval(*node.expr);
+            break;
 
         case NodeType::Block:
             for (const auto& child : node.body) {
@@ -2026,7 +2185,9 @@ struct Evaluator {
 ExprPtr parse_expression(std::string_view src) {
     auto tokens = lex_expression(src);
     ExprParser parser{tokens, 0};
-    return parser.parse_expression();
+    auto expr = parser.parse_expression();
+    parser.expect(TokenKind::Eof);
+    return expr;
 }
 
 NodePtr parse(const std::vector<TemplateToken>& tokens) {
@@ -2073,10 +2234,16 @@ bool is_reserved_context_key(std::string_view key) {
 Result<std::string> render_template(const std::string& template_str,
                                     const std::optional<std::string>& bos_token,
                                     const std::optional<std::string>& eos_token,
-                                    nlohmann::json messages,
+                                    nlohmann::ordered_json messages,
                                     bool add_generation_prompt,
-                                    const nlohmann::json& template_args) {
-    using json = nlohmann::json;
+                                    const nlohmann::ordered_json& template_args) {
+    using json = nlohmann::ordered_json;
+
+    if (!messages.is_array()) return make_error("Chat messages must be a JSON array");
+    for (const auto& message : messages) {
+        if (!message.is_object() || !message.contains("role") || !message["role"].is_string())
+            return make_error("Each chat message must be an object with a string role");
+    }
 
     json context = json::object();
 
@@ -2113,10 +2280,10 @@ Result<std::string> render_template(const std::string& template_str,
 
 Result<std::string> ChatTemplate::apply(const std::vector<ChatMessage>& messages,
                                         bool add_generation_prompt,
-                                        const nlohmann::json& template_args) const {
-    nlohmann::json msgs = nlohmann::json::array();
+                                        const nlohmann::ordered_json& template_args) const {
+    nlohmann::ordered_json msgs = nlohmann::ordered_json::array();
     for (const auto& msg : messages) {
-        nlohmann::json m = nlohmann::json::object();
+        nlohmann::ordered_json m = nlohmann::ordered_json::object();
         m["role"] = msg.role;
         m["content"] = msg.content;
         msgs.push_back(m);
@@ -2125,9 +2292,9 @@ Result<std::string> ChatTemplate::apply(const std::vector<ChatMessage>& messages
                            add_generation_prompt, template_args);
 }
 
-Result<std::string> ChatTemplate::apply_json(const nlohmann::json& messages_json,
+Result<std::string> ChatTemplate::apply_json(const nlohmann::ordered_json& messages_json,
                                              bool add_generation_prompt,
-                                             const nlohmann::json& template_args) const {
+                                             const nlohmann::ordered_json& template_args) const {
     return render_template(template_str_, bos_token_, eos_token_, messages_json,
                            add_generation_prompt, template_args);
 }

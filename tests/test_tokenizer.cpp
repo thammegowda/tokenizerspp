@@ -13,6 +13,9 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 
 namespace tokenizers {
 namespace {
@@ -1134,6 +1137,124 @@ TEST(TokenizerChatTest, NamedTemplates) {
     auto r2 = tok->apply_chat_template({{"user", "Hi"}}, false, "tool_use");
     ASSERT_TRUE(r2.has_value()) << r2.error().message();
     EXPECT_NE(r2->find("tool: Hi"), std::string::npos);
+}
+
+TEST(TokenizerChatTest, StructuredEncodingUsesNamedTemplateWithoutDuplicateSpecialTokens) {
+    auto tok = Tokenizer::from_string(R"({
+        "model":{"type":"WordPiece","unk_token":"[UNK]",
+                 "vocab":{"[UNK]":0,"hello":1,"[CLS]":2,"[SEP]":3}},
+        "post_processor":{"type":"BertProcessing","cls":["[CLS]",2],"sep":["[SEP]",3]}
+    })");
+    ASSERT_TRUE(tok) << tok.error().message();
+    TokenizerConfig config;
+    config.named_chat_templates["tool_use"] =
+        "{% generation %}"
+        "{{ messages[0].tool_calls[0].function.name }}{{ messages[1].content }}"
+        "{% endgeneration %}";
+    tok->with_config(std::move(config));
+    auto messages = nlohmann::ordered_json::parse(R"([
+        {"role":"assistant","tool_calls":[{"function":{"name":"hel","arguments":{}}}]},
+        {"role":"tool","content":"lo"}
+    ])");
+    auto encoded = tok->encode_chat_json(messages, true, "tool_use");
+    ASSERT_TRUE(encoded) << encoded.error().message();
+    EXPECT_EQ(encoded->get_ids(), std::vector<int32_t>({1}));
+    auto invalid = tok->encode_chat_json(messages, true, "missing");
+    ASSERT_FALSE(invalid);
+}
+
+TEST(TokenizerChatTest, StructuredContentAndTemplateLiteralsAreNotRewritten) {
+    auto tok = Tokenizer::from_string(R"({
+        "model":{"type":"WordPiece","unk_token":"[UNK]","vocab":{"[UNK]":0}}
+    })");
+    ASSERT_TRUE(tok) << tok.error().message();
+    TokenizerConfig config;
+    config.default_chat_template =
+        "{{ messages[0]['content'][0]['text'] }}|{{ '[::-1]' }}|"
+        "{{ '{% generation %}' }}";
+    tok->with_config(std::move(config));
+    auto messages = nlohmann::ordered_json::parse(
+        R"([{"role":"user","content":[{"type":"text","text":"hello"}]}])");
+    auto result = tok->apply_chat_template_json(messages);
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(*result, "hello|[::-1]|{% generation %}");
+}
+
+class TokenizerChatDirectoryTest : public ::testing::Test {
+protected:
+    std::filesystem::path directory;
+
+    void SetUp() override {
+        directory = std::filesystem::temp_directory_path() /
+            ("tokenizerpp-chat-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        ASSERT_TRUE(std::filesystem::create_directory(directory));
+        std::ofstream(directory / "tokenizer.json") << R"({
+            "model":{"type":"WordPiece","unk_token":"[UNK]","vocab":{"[UNK]":0}}
+        })";
+    }
+
+    void TearDown() override {
+        for (const auto* name : {"tokenizer.json", "tokenizer_config.json", "chat_template.jinja"})
+            std::filesystem::remove(directory / name);
+        std::filesystem::remove(directory);
+    }
+};
+
+TEST_F(TokenizerChatDirectoryTest, LoadsStandaloneTemplateAndOverridesEmbeddedDefault) {
+    std::ofstream(directory / "chat_template.jinja") << "{{ bos_token }}{{ messages[0].content }}";
+    auto standalone = Tokenizer::from_directory(directory.string());
+    ASSERT_TRUE(standalone) << standalone.error().message();
+    auto rendered = standalone->apply_chat_template({{"user", "hello"}});
+    ASSERT_TRUE(rendered) << rendered.error().message();
+    EXPECT_EQ(*rendered, "hello");
+
+    std::ofstream(directory / "tokenizer_config.json")
+        << R"({"bos_token":"<bos>","chat_template":"old template"})";
+    auto configured = Tokenizer::from_file((directory / "tokenizer.json").string());
+    ASSERT_TRUE(configured) << configured.error().message();
+    rendered = configured->apply_chat_template({{"user", "hello"}});
+    ASSERT_TRUE(rendered) << rendered.error().message();
+    EXPECT_EQ(*rendered, "<bos>hello");
+}
+
+TEST_F(TokenizerChatDirectoryTest, InvalidSiblingConfigIsNotSilentlyIgnored) {
+    std::ofstream(directory / "tokenizer_config.json") << "{bad json";
+    auto loaded = Tokenizer::from_directory(directory.string());
+    ASSERT_FALSE(loaded);
+    EXPECT_NE(loaded.error().message().find("tokenizer_config.json"), std::string::npos);
+}
+
+TEST_F(TokenizerChatDirectoryTest, RejectsNonFileStandaloneTemplate) {
+    std::ofstream(directory / "tokenizer_config.json")
+        << R"({"chat_template":"embedded template"})";
+    ASSERT_TRUE(std::filesystem::create_directory(directory / "chat_template.jinja"));
+
+    auto loaded = Tokenizer::from_directory(directory.string());
+    ASSERT_FALSE(loaded);
+    EXPECT_NE(loaded.error().message().find("not a regular file"), std::string::npos);
+}
+
+TEST(TokenizerChatTest, UsesCurrentConfigTokensAfterConfigChanges) {
+    Tokenizer tok;
+    TokenizerConfig config;
+    config.default_chat_template = "{{ bos_token }}{{ messages[0].content }}";
+    config.bos_token = "<old>";
+    tok.with_config(config);
+
+    auto flat = tok.apply_chat_template({{"user", "hello"}});
+    ASSERT_TRUE(flat) << flat.error().message();
+    EXPECT_EQ(*flat, "<old>hello");
+
+    config.bos_token = "<new>";
+    tok.with_config(config);
+    flat = tok.apply_chat_template({{"user", "hello"}});
+    ASSERT_TRUE(flat) << flat.error().message();
+    EXPECT_EQ(*flat, "<new>hello");
+
+    auto structured = tok.apply_chat_template_json(
+        nlohmann::ordered_json::parse(R"([{"role":"user","content":"hello"}])"));
+    ASSERT_TRUE(structured) << structured.error().message();
+    EXPECT_EQ(*structured, "<new>hello");
 }
 
 // ============================================================================
