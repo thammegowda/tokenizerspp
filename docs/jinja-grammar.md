@@ -38,6 +38,9 @@ statement      ::= for_stmt
                  | endmacro_stmt
                  | raw_stmt
                  | endraw_stmt
+                 | generation_stmt
+                 | endgeneration_stmt
+                 | do_stmt
 
 for_stmt       ::= 'for' target_list 'in' expression [ 'if' expression ] [ 'recursive' ]
 endfor_stmt    ::= 'endfor'
@@ -53,6 +56,10 @@ endset_stmt    ::= 'endset'
 
 macro_stmt     ::= 'macro' IDENT '(' [ param_list ] ')'
 endmacro_stmt  ::= 'endmacro'
+
+generation_stmt ::= 'generation'
+endgeneration_stmt ::= 'endgeneration'
+do_stmt        ::= 'do' expression
 
 target_list    ::= target { ',' target }
 target         ::= IDENT | IDENT '.' IDENT    -- namespace attribute assignment
@@ -152,7 +159,8 @@ Usage: `expression 'is' ['not'] test_name [ '(' arg_list ')' ]`
 | upper                               -- uppercase
 | lower                               -- lowercase
 | title                               -- title case
-| tojson                              -- JSON serialize
+| tojson(indent=none, ensure_ascii=false, sort_keys=false, separators=(', ', ': '))
+                                      -- HF JSON serialize; preserves object order by default
 | int(default=0)                      -- to integer
 | float(default=0.0)                  -- to float
 | string                              -- to string
@@ -165,6 +173,9 @@ Usage: `expression 'is' ['not'] test_name [ '(' arg_list ')' ]`
 | reject(test)                        -- reject matching
 | rejectattr(attr[, test[, value]])   -- reject by attribute
 | select(test)                        -- select matching
+| dictsort(case_sensitive=false, by='key', reverse=false)
+| items                               -- mapping pairs in insertion order
+| safe                                -- identity (no HTML autoescaping)
 ```
 
 ### Lower priority
@@ -217,6 +228,24 @@ recursive  scoped  set  true  with  without
    {{ ns.found }}  {# visible here! #}
    ```
 5. **`set` with `IDENT.attr`** syntax only works on namespace objects
+
+## 9. Agentic Template Semantics and Boundaries
+
+- `+` concatenates lists without converting them to strings.
+- `list.append(value)` and `list.extend(values)` mutate a resolved list in
+  the render context, including lists stored on namespace objects. Use
+  `{% do ... %}` or assign the return value to avoid emitting `None`.
+- Generation blocks render their body with ordinary whitespace controls;
+  assistant-token masks are not implemented.
+- Object literals and `ordered_json` inputs preserve insertion order.
+- Template tag delimiters inside quoted strings or nested expressions do
+  not close the tag. Unknown calls/filters and malformed output expressions
+  return errors.
+
+This document describes the target grammar as well as implemented features;
+it is not a claim of full Python/Jinja compatibility. In particular, the engine
+uses JSON values rather than Python object identities and does not implement
+general list aliasing. Consult the tests for validated template paths.
 
 ## 9. Loop Variables
 

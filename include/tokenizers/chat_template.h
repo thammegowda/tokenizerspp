@@ -37,13 +37,15 @@ public:
     [[nodiscard]] Result<std::string> apply(
         const std::vector<ChatMessage>& messages,
         bool add_generation_prompt = false,
-        const nlohmann::json& template_args = nlohmann::json::object()) const;
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
 
-    /// Apply the template to pre-built JSON messages (for structured content).
+    /// Apply structured messages, including tool_calls, tool_call_id, name,
+    /// reasoning_content, and content parts. Parse inputs as ordered_json to
+    /// preserve key order; converting an already sorted json cannot restore it.
     [[nodiscard]] Result<std::string> apply_json(
-        const nlohmann::json& messages_json,
+        const nlohmann::ordered_json& messages_json,
         bool add_generation_prompt = false,
-        const nlohmann::json& template_args = nlohmann::json::object()) const;
+        const nlohmann::ordered_json& template_args = nlohmann::ordered_json::object()) const;
 
 private:
     std::string template_str_;

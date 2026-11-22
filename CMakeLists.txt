@@ -151,6 +151,8 @@ if(TOKENIZERPP_BUILD_TESTS)
         tests/test_chat_template.cpp
     )
     target_link_libraries(tokenizerpp_tests PRIVATE tokenizerpp GTest::gtest_main)
+    add_executable(tokenizerpp_render_chat tools/render_chat.cpp)
+    target_link_libraries(tokenizerpp_render_chat PRIVATE tokenizerpp)
     include(GoogleTest)
     gtest_discover_tests(tokenizerpp_tests)
 endif()
